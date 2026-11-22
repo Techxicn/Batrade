@@ -15,7 +15,7 @@ from typing import Any
 import yaml
 
 from batrade.net import ifaces
-from batrade.net.iputil import default_gateway
+from batrade.net.iputil import default_gateway, valid_ipv4
 
 log = logging.getLogger("batrade.config")
 
@@ -67,6 +67,9 @@ class ScanCfg:
     udp_timeout: int = 60
     quick_periodic_hours: int = 24
     weekly_rescan_days: int = 7
+    # Objetivos que no se escanean nunca: IPs sueltas o redes CIDR. Sirve para
+    # equipos que no responden y sólo dejarían XML a medias en cada intento.
+    exclude: tuple[str, ...] = ()
     risky_ports: dict[tuple[str, int], RiskyPort] = field(default_factory=dict)
 
 
@@ -200,6 +203,31 @@ def _parse_risky(raw: Any, errors: list[str]) -> dict[tuple[str, int], RiskyPort
             reason=str(item.get("reason") or "Servicio considerado riesgoso"),
         )
     return out
+
+
+def _parse_exclude(raw: Any, errors: list[str]) -> tuple[str, ...]:
+    """Normaliza ``scan.exclude``: IPv4 sueltas o redes CIDR normalizadas.
+
+    Se valida al cargar para que un typo no deje un objetivo «excluido» que en
+    realidad se sigue escaneando: es la vía que ofrece el mensaje de /health.
+    """
+    if not isinstance(raw, list):
+        errors.append("scan.exclude debe ser una lista de IPs o redes CIDR")
+        return ()
+    out: list[str] = []
+    for item in raw:
+        texto = str(item).strip()
+        ip = valid_ipv4(texto)
+        if ip:
+            out.append(ip)
+            continue
+        try:
+            red = ipaddress.IPv4Network(texto, strict=False)
+        except ValueError:
+            errors.append(f"scan.exclude: {item!r} no es una IP ni una red IPv4")
+            continue
+        out.append(str(red))
+    return tuple(dict.fromkeys(out))
 
 
 def load_config(path: str | Path = "config.yaml", root: str | Path | None = None) -> Config:
@@ -347,6 +375,7 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
         udp_timeout=int(_get(scan_raw, "udp_timeout", 60)),
         quick_periodic_hours=int(_get(scan_raw, "quick_periodic_hours", 24)),
         weekly_rescan_days=int(_get(scan_raw, "weekly_rescan_days", 7)),
+        exclude=_parse_exclude(scan_raw.get("exclude") or [], errors),
         risky_ports=_parse_risky(scan_raw.get("risky_ports") or [], errors),
     )
     notify = NotifyCfg(

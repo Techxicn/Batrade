@@ -6,6 +6,7 @@ import re
 import socket
 import subprocess
 import time
+from collections.abc import Iterable
 
 MAC_RE = re.compile(r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
 
@@ -73,6 +74,24 @@ def cidr_size(cidr: str) -> int:
         return ipaddress.IPv4Network(cidr, strict=False).num_addresses
     except ValueError:
         return 0
+
+
+def ip_excluded(ip: str | None, entries: Iterable[str]) -> bool:
+    """True si ``ip`` cae en alguna entrada de ``scan.exclude``.
+
+    Cada entrada es una IPv4 suelta o una red CIDR; se aceptan ambas porque el
+    operador quiere poder excluir «ese trasto» o una VLAN entera.
+    """
+    addr = valid_ipv4(ip)
+    if not addr:
+        return False
+    for entrada in entries:
+        if "/" in str(entrada):
+            if ip_in_cidr(addr, str(entrada)):
+                return True
+        elif str(entrada).strip() == addr:
+            return True
+    return False
 
 
 def default_gateway() -> str | None:

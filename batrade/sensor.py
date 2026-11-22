@@ -30,8 +30,8 @@ from batrade.detect.state import Baseline
 from batrade.inventory import Inventory, status as baseline_status
 from batrade.net import caps as caps_mod
 from batrade.net.discovery import Discovery, DiscoveryError
-from batrade.net.iputil import (default_gateway, interface_ipv4, ip_in_cidr,
-                                normalize_mac, now_ms)
+from batrade.net.iputil import (default_gateway, interface_ipv4, ip_excluded,
+                                ip_in_cidr, normalize_mac, now_ms)
 from batrade.net.neigh import NeighborWatcher
 from batrade.net.nmap_scan import (ScanError, TargetScanError, run_scan,
                                    udp_risky_ports)
@@ -359,6 +359,8 @@ class Sensor:
 
         for ip in hosts:
             if ip == self.sensor_ip:
+                continue
+            if ip_excluded(ip, self.cfg.scan.exclude):
                 continue
             device = store.get_device_by_ip(conn, ip)
             if device is None:

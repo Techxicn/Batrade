@@ -9,9 +9,12 @@ from typing import Any
 
 import pytest
 
-from batrade import store
+from batrade import db, store
+from batrade.config import ConfigError, load_config
+from batrade.dashboard.app import create_app
 from batrade.net import nmap_scan
 from batrade.net.caps import Capabilities
+from batrade.net.iputil import ip_excluded
 from batrade.net.nmap_scan import (TARGET_UNREACHABLE, ScanResult, TargetScanError,
                                    run_scan)
 from batrade.sensor import ScanJob, Sensor
@@ -212,3 +215,68 @@ def test_standard_fallido_no_se_reintenta_en_cada_barrido(conn, cfg):
                            1_000_000 + 25 * HORA_MS)
     job = sensor.scan_queue.get_nowait()
     assert (job.ip, job.profile) == ("10.10.10.50", "standard")
+
+
+# --------------------------------------------------------------------------- #
+# scan.exclude: la salida que ofrece el mensaje del operador
+# --------------------------------------------------------------------------- #
+def _cfg_exclude(tmp_path, valor: str):
+    ruta = tmp_path / "exclude.yaml"
+    ruta.write_text(
+        "network: { interface: lo, cidr: 10.10.10.0/24 }\n"
+        f"scan: {{ exclude: {valor} }}\n",
+        encoding="utf-8",
+    )
+    return load_config(ruta, tmp_path)
+
+
+def test_exclude_acepta_ips_y_redes_y_deduplica(tmp_path):
+    cfg = _cfg_exclude(tmp_path, "[10.10.10.77, 10.10.20.0/24, 10.10.10.77]")
+    assert cfg.scan.exclude == ("10.10.10.77", "10.10.20.0/24")
+
+
+def test_exclude_rechaza_entradas_invalidas(tmp_path):
+    with pytest.raises(ConfigError) as exc:
+        _cfg_exclude(tmp_path, "[10.10.10.999, no-es-una-ip]")
+    errores = [e for e in exc.value.errors if "scan.exclude" in e]
+    assert len(errores) == 2
+
+
+def test_ip_excluded_entiende_ip_y_red():
+    assert ip_excluded("10.10.10.77", ("10.10.10.77",))
+    assert ip_excluded("10.10.20.5", ("10.10.20.0/24",))
+    assert not ip_excluded("10.10.21.5", ("10.10.20.0/24",))
+    assert not ip_excluded("no-es-ip", ("10.10.20.0/24",))
+
+
+def test_objetivo_excluido_no_se_encola(conn, cfg):
+    cfg.scan.enabled = True
+    _device(conn)
+
+    sensor = _sensor(cfg)
+    sensor._schedule_scans(conn, {"10.10.10.50": "3c:22:fb:11:22:33"}, 1_000_000)
+    job = sensor.scan_queue.get_nowait()
+    assert (job.ip, job.profile) == ("10.10.10.50", "standard")
+
+    # Con la exclusión puesta no se programa nada para ese equipo.
+    cfg.scan.exclude = ("10.10.10.50",)
+    sensor = _sensor(cfg)
+    sensor._schedule_scans(conn, {"10.10.10.50": "3c:22:fb:11:22:33"}, 2_000_000)
+    assert sensor.scan_queue.empty()
+
+
+def test_dashboard_no_encola_objetivos_excluidos(cfg):
+    cfg.scan.exclude = ("10.10.10.50",)
+    client = create_app(cfg).test_client()
+    client.get("/")
+    with client.session_transaction() as session:
+        token = session["csrf"]
+
+    respuesta = client.post("/scan", data={"csrf": token, "objetivo": "10.10.10.50",
+                                          "perfil": "quick"}, follow_redirects=True)
+    assert respuesta.status_code == 200
+    conn = db.connect(cfg.paths.db)
+    pendientes = conn.execute("SELECT COUNT(*) AS n FROM scan_requests").fetchone()["n"]
+    conn.close()
+    assert pendientes == 0
+    assert "excluido en scan.exclude" in respuesta.data.decode()
