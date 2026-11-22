@@ -6,7 +6,9 @@
   <title>{% block title %}Panel{% endblock %} · Batrade</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body>
+<body data-live-poll="{{ cfg.dashboard.live_poll_s }}"
+      data-live-url="{{ url_for('api_live') }}"
+      data-events-url="{{ url_for('events') }}">
 <header class="topbar">
   <a class="brand" href="{{ url_for('index') }}">
     <span class="logo"></span> Batrade <em>Home-SOC</em>
@@ -24,6 +26,8 @@
 </header>
 
 <main>
+  <div class="banner warn" id="live-offline" role="status" hidden>Sin conexión con el panel</div>
+
   {% if learning and request.endpoint != 'learning' %}
   <div class="banner">
     <strong>Modo aprendizaje.</strong> Los equipos nuevos no generan alertas todavía.
@@ -41,5 +45,6 @@
 <footer>
   Batrade · IDS doméstico · solo metadatos, nunca contenido del tráfico
 </footer>
+<script src="{{ url_for('static', filename='live.js') }}" defer></script>
 </body>
 </html>
