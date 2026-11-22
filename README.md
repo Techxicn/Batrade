@@ -316,49 +316,56 @@ chmod 600 .env
 
 Every alert answers *what happened / why it matters / what to do*, plus event, time, source/destination and accumulated repetitions. A failed delivery never loses the event: it stays queued with backoff and visible in the panel.
 
-## Panel en vivo
+## Live panel
 
-El panel ya no necesita recargar para enseñar lo que llega. Cada `dashboard.live_poll_s`
-segundos (3 por defecto, rango 1..60) el navegador pide `GET /api/live` —la única ruta
-JSON del proyecto y de sólo lectura— y con esa respuesta actualiza los contadores de
-*Panel*, la tabla de *Alertas*, el latido del sensor y los avisos emergentes. Sin
-WebSockets ni SSE: un `GET` cada pocos segundos.
+The panel no longer needs a manual reload. Every `dashboard.live_poll_s` seconds (3 by
+default, range 1..60) the browser requests `GET /api/live` — the only JSON route in the
+project, and read-only — and uses the answer to refresh the *Panel* counters, the
+*Alerts* table, the sensor heartbeat and the in-page notices. No WebSockets and no SSE:
+one `GET` every few seconds.
 
-- **Cursor, no historial.** La primera respuesta sólo trae `max_id`, el resumen y el
-  latido; a partir de ahí el cliente pide `?after=<id>`. Abrir o recargar el panel no
-  dispara avisos de lo que ya estaba en la base. Las repeticiones deduplicadas no vuelven
-  a salir (igual que en las notificaciones del sensor); una escalada de `warn` a `crit`
-  sí llega, porque es un evento nuevo con su propio id.
-- **Pop-ups.** Hasta cuatro a la vez. Un `crit` se queda hasta que lo cierres; un `warn`
-  desaparece a los 10 s. Si en un ciclo llegan más de tres, se agrupan en un solo aviso
-  «N alertas nuevas».
-- **Sonido.** Web Audio sintetizado, sin archivos ni CDN: un tono para `warn` y un doble
-  tono más grave para `crit`, como mucho uno cada 5 s. El interruptor «Avisos» de la
-  barra guarda las preferencias (sonido, notificaciones, sólo críticas) en
-  `localStorage`.
-- **Notificaciones y título.** Con contexto seguro y permiso concedido, cada alerta
-  genera una notificación que al pulsarla enfoca la pestaña y abre `/events`; fuera de la
-  pestaña el título pasa a `(N) Batrade` y se limpia al volver.
+- **Cursor, not history.** The first response only carries `max_id`, the summary and the
+  heartbeat; from then on the client asks for `?after=<id>`. Opening or reloading the
+  panel never fires notices for what was already in the database. Deduplicated
+  repetitions do not come back (same rule as the sensor notifications); a `warn`→`crit`
+  escalation does, because it is a new event with its own id.
+- **Pop-ups.** Up to four at a time. A `crit` stays until you close it; a `warn` fades
+  after 10 s. More than three in one cycle collapse into a single "N new alerts" notice.
+- **Sound.** Synthesized with Web Audio, no files and no CDN: one tone for `warn` and a
+  lower double tone for `crit`. A `warn` plays at most once every 5 s; a `crit` always
+  plays, with a 1 s floor between any two sounds. The "Avisos" switch in the top bar
+  stores the preferences (sound, notifications, criticals only) in `localStorage`.
+- **Notifications and title.** With a secure context and permission granted, every alert
+  raises a browser notification that focuses the tab and opens `/events` when clicked;
+  while the tab is in the background the title becomes `(N) Batrade` and clears when you
+  come back.
 
-### Límites que conviene conocer
+### Known limits
 
-- **El sonido exige un clic.** Los navegadores no permiten audio antes de una
-  interacción: hasta que pulses «Avisos» el panel está en silencio. Si la preferencia
-  sobrevive a una recarga, el primer clic o tecla de la página vuelve a habilitarlo.
-- **Notificaciones sólo en contexto seguro.** `localhost` y `127.0.0.1` cuentan como
-  seguros; por HTTP con una IP de la LAN no lo son. En ese caso el aviso se queda en el
-  pop-up de la página y la barra explica el motivo (lo mismo si el navegador no admite
-  notificaciones o si el permiso está bloqueado).
-- **Pestaña cerrada, no hay panel.** El sondeo vive en la página: si cierras la pestaña
-  no hay avisos, y con la pestaña oculta el ritmo baja a 15 s mientras las alertas se
-  acumulan en el título. Los canales de Telegram y Discord siguen siendo cosa del sensor.
-- **Sin conexión.** Si el panel no responde aparece «Sin conexión con el panel» y el
-  sondeo retrocede hasta 30 s; al volver el servidor se reanuda solo. Con
-  `DASHBOARD_TOKEN` configurado, una sesión caducada detiene el sondeo con un 401: hay
-  que volver a iniciar sesión.
-- **Qué no se refresca.** En *Dispositivos* el estado en línea no se actualiza en vivo
-  (haría falta otra ruta JSON, fuera de alcance) y los contadores de falsos positivos
-  quedan como los pintó la última carga.
+- **Sound needs a click.** Browsers do not allow audio before an interaction: until you
+  press "Avisos" the panel stays silent. If the preference survives a reload, the first
+  click or keypress on the page re-enables it.
+- **Notifications need a secure context.** `localhost` and `127.0.0.1` count as secure;
+  plain HTTP on a LAN IP does not. In that case the notice stays in the page pop-up and
+  the top bar explains why (same if the browser has no `Notification` support or the
+  permission is blocked). To get browser notifications from another machine, forward the
+  port over SSH and open it as localhost:
+
+  ```bash
+  ssh -L 8000:127.0.0.1:8000 user@sensor-host
+  # then open http://localhost:8000 on your own machine
+  ```
+
+- **Closed tab, no panel.** Polling lives in the page: closing the tab stops the notices,
+  and a background tab slows down to 15 s while alerts pile up in the title. Telegram and
+  Discord remain the sensor's job.
+- **No connection.** If the panel does not answer, "Sin conexión con el panel" appears and
+  polling backs off up to 30 s; it resumes on its own when the server comes back. Any
+  request that takes longer than 10 s is aborted and treated as a failure. With
+  `DASHBOARD_TOKEN` set, an expired session stops polling with a 401 and you have to sign
+  in again.
+- **What does not refresh.** On *Devices* the online state is still updated only on
+  reload: doing it live would need another JSON route, which is out of scope.
 
 ## Production deployment (systemd)
 
