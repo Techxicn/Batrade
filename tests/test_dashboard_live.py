@@ -339,6 +339,28 @@ def test_sondeo_aborta_a_los_10s(cfg):
     assert fuente.count("clearTimeout(reloj)") >= 3
 
 
+def test_resumen_incluye_falsos_positivos_de_hoy(client, cfg):
+    conn = db.connect(cfg.paths.db)
+    ahora = now_ms()
+    fp_hoy = _evento(conn, ts=ahora, severidad="warn", clave="fp-hoy")
+    _evento(conn, ts=ahora, severidad="crit", clave="fp-nada")
+    fp_viejo = _evento(conn, ts=ahora - 3 * 86_400_000, severidad="warn", clave="fp-viejo")
+    store.set_disposition(conn, fp_hoy["event_id"], "fp")
+    store.set_disposition(conn, fp_viejo["event_id"], "fp")
+    conn.close()
+
+    resumen = client.get("/api/live").get_json()["resumen"]
+    # Sólo cuenta lo marcado como falso positivo y con avistamiento de hoy.
+    assert resumen["fp_hoy"] == 1
+    assert resumen["alertas_hoy"]["total"] >= 2
+
+    panel = client.get("/").data.decode()
+    assert 'data-live="fp">1</strong>' in panel
+    assert 'data-live="fp-sub"' in panel
+    # El cliente refresca el contador con el mismo campo del resumen.
+    assert "resumen.fp_hoy" in _live_js()
+
+
 # --------------------------------------------------------------------------- #
 # Configuración de la cadencia
 # --------------------------------------------------------------------------- #

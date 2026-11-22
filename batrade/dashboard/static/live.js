@@ -281,6 +281,8 @@
     texto("[data-live='alertas-crit']", Number(alertas.crit) || 0);
     texto("[data-live='alertas-sub']", (Number(alertas.warn) || 0) + " advertencias · " +
       (Number(alertas.info) || 0) + " info");
+    texto("[data-live='fp']", Number(resumen.fp_hoy) || 0);
+    texto("[data-live='fp-sub']", "de " + (Number(alertas.total) || 0) + " eventos");
     color("[data-live='desconocidos']", resumen.desconocidos, "warn-text");
     color("[data-live='no-autorizados']", resumen.no_autorizados, "crit-text");
     color("[data-live='alertas-crit']", alertas.crit, "crit-text");

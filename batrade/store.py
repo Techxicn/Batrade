@@ -509,6 +509,15 @@ def event_counts(conn: sqlite3.Connection, since: int) -> dict[str, int]:
     return out
 
 
+def false_positives_since(conn: sqlite3.Connection, since: int) -> int:
+    """Eventos de hoy marcados como falso positivo (KPI del panel)."""
+    row = conn.execute(
+        "SELECT COUNT(*) AS n FROM events WHERE last_ts >= ? AND disposicion = 'fp'",
+        (since,),
+    ).fetchone()
+    return int(row["n"]) if row is not None else 0
+
+
 def set_disposition(conn: sqlite3.Connection, event_id: int, disposicion: str) -> bool:
     if disposicion not in ("sin_evaluar", "tp", "fp"):
         raise ValueError(f"disposición inválida: {disposicion}")
@@ -562,6 +571,7 @@ def live_summary(conn: sqlite3.Connection, since_ts: int) -> dict[str, Any]:
         "en_linea": int(counts.get("online", 0)),
         "desconocidos": int(counts.get("desconocidos", 0)),
         "no_autorizados": int(counts.get("no_autorizados", 0)),
+        "fp_hoy": false_positives_since(conn, since_ts),
         "alertas_hoy": {
             "info": int(sev.get("info", 0)),
             "warn": int(sev.get("warn", 0)),

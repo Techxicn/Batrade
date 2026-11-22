@@ -288,9 +288,7 @@ def create_app(cfg: Config) -> Flask:
         recent = store.list_events(conn, limit=8)
         base = baseline_status(conn)
         total_today = sum(sev.values())
-        fp_today = conn.execute(
-            "SELECT COUNT(*) AS n FROM events WHERE last_ts >= ? AND disposicion = 'fp'",
-            (since,)).fetchone()["n"]
+        fp_today = store.false_positives_since(conn, since)
         return render_template(
             "index.html", counts=counts, sev=sev, recent=recent, base=base,
             total_today=total_today, fp_today=int(fp_today),
