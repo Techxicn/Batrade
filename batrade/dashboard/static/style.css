@@ -409,3 +409,10 @@ code { font-family: var(--mono); font-size: 12.5px; background: #1a2330; padding
   color: var(--muted);
   font-size: 13px;
 }
+
+.live-note {
+  max-width: 280px;
+  font-size: 11px;
+  line-height: 1.35;
+  color: var(--warn);
+}

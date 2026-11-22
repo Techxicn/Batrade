@@ -31,6 +31,7 @@
         <label><input type="checkbox" id="live-pref-crit"> Solo críticas</label>
       </div>
     </details>
+    <span class="live-note" id="live-note" hidden></span>
   </div>
   <div class="pill {{ 'ok' if not health.stale else 'bad' }}">
     {{ 'sensor vivo' if not health.stale else 'sensor sin latido' }} · {{ mode }}

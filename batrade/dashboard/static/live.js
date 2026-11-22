@@ -38,7 +38,9 @@
     activado: false,          // interruptor "Avisos": silencio hasta el clic
     prefs: { sonido: true, notificaciones: true, soloCriticas: false },
     audio: null,
-    ultimoSonido: 0
+    ultimoSonido: 0,
+    noVistas: 0,              // alertas sin ver, para el título "(N) Batrade"
+    tituloOriginal: document.title
   };
 
   function limitar(valor, minimo, maximo) {
@@ -148,15 +150,29 @@
     // Un solo sonido por ciclo, con la severidad más alta del lote.
     sonar(peor);
 
+    var agrupado = visibles.length > RAFAGA_MAX;
     // Una ráfaga no puede tapar el panel: un solo aviso con el recuento.
-    if (visibles.length > RAFAGA_MAX) {
+    if (agrupado) {
       aviso(peor, visibles.length + " alertas nuevas",
         "Se agruparon para no tapar el panel.", destino);
+    } else {
+      for (var j = 0; j < visibles.length; j++) {
+        var ev = visibles[j];
+        aviso(ev.severidad, ev.tipo || "Alerta", ev.resumen || null, destino);
+      }
+    }
+
+    // Fuera de la pestaña: se cuenta para el título y se intenta notificar.
+    if (!document.hidden) return;
+    contarNoVistas(visibles.length);
+    if (agrupado) {
+      notificar(peor, visibles.length + " alertas nuevas",
+        "Se agruparon para no tapar el panel.", destino, "rafaga");
       return;
     }
-    for (var j = 0; j < visibles.length; j++) {
-      var ev = visibles[j];
-      aviso(ev.severidad, ev.tipo || "Alerta", ev.resumen || null, destino);
+    for (var k = 0; k < visibles.length; k++) {
+      notificar(visibles[k].severidad, visibles[k].tipo || "Alerta",
+        visibles[k].resumen || null, destino, visibles[k].id);
     }
   }
 
@@ -319,7 +335,7 @@
     try {
       var peticion = window.Notification.requestPermission();
       if (peticion && typeof peticion.then === "function") {
-        peticion.then(function () {}, function () {});
+        peticion.then(pintarNota, pintarNota);
       }
     } catch (error) {
       // Navegadores con callback: el permiso queda como estaba.
@@ -335,6 +351,7 @@
       contextoAudio();
       pedirPermisoNotificaciones();
     }
+    pintarNota();
   }
 
   function conectarControles() {
@@ -360,6 +377,7 @@
         estado.prefs.notificaciones = notificaciones.checked;
         guardarPrefs();
         if (notificaciones.checked && estado.activado) pedirPermisoNotificaciones();
+        pintarNota();
       });
     }
     var criticas = document.getElementById("live-pref-crit");
@@ -370,6 +388,80 @@
         guardarPrefs();
       });
     }
+  }
+
+  // --------------------------------------- notificaciones del navegador y título
+  // Sólo se usan con contexto seguro y permiso concedido. Si no, el aviso se
+  // queda en el pop-up de la página y la barra explica por qué.
+  function motivoSinNotificaciones() {
+    if (typeof window.Notification === "undefined") {
+      return "Este navegador no admite notificaciones; el aviso queda en la página.";
+    }
+    if (window.isSecureContext !== true) {
+      return "Notificaciones no disponibles por HTTP con una IP: usa localhost " +
+        "o HTTPS. El aviso queda en la página.";
+    }
+    if (window.Notification.permission === "denied") {
+      return "Notificaciones bloqueadas en el navegador; el aviso queda en la página.";
+    }
+    if (window.Notification.permission === "default") {
+      return "Notificaciones sin permiso todavía; el aviso queda en la página.";
+    }
+    return "";
+  }
+
+  function pintarNota() {
+    var nota = document.getElementById("live-note");
+    if (!nota) return;
+    var motivo = (estado.activado && estado.prefs.notificaciones)
+      ? motivoSinNotificaciones() : "";
+    if (!motivo) {
+      nota.textContent = "";
+      nota.hidden = true;
+      return;
+    }
+    nota.textContent = motivo;
+    nota.hidden = false;
+  }
+
+  function notificar(severidad, titulo, texto, enlace, id) {
+    if (!estado.activado || !estado.prefs.notificaciones) return;
+    if (motivoSinNotificaciones()) {
+      pintarNota();
+      return;
+    }
+    var etiqueta = ETIQUETA_SEV[severidad] || "Alerta";
+    try {
+      var avisoNavegador = new window.Notification("Batrade · " + etiqueta, {
+        body: texto ? String(titulo) + " — " + String(texto) : String(titulo),
+        tag: "batrade-alerta-" + String(id),
+        silent: true  // el tono lo pone Web Audio; no se duplica
+      });
+      avisoNavegador.onclick = function () {
+        window.focus();
+        if (enlace) window.location.assign(enlace);
+        avisoNavegador.close();
+      };
+    } catch (error) {
+      // Si el navegador rechaza la notificación, el pop-up ya está en pantalla.
+    }
+  }
+
+  function contarNoVistas(cantidad) {
+    estado.noVistas += cantidad;
+    pintarTitulo();
+  }
+
+  function pintarTitulo() {
+    document.title = estado.noVistas > 0
+      ? "(" + estado.noVistas + ") Batrade"
+      : estado.tituloOriginal;
+  }
+
+  function limpiarNoVistas() {
+    if (!estado.noVistas) return;
+    estado.noVistas = 0;
+    pintarTitulo();
   }
 
   // Si la preferencia "activado" sobrevivió a la recarga, el primer gesto en la
@@ -383,17 +475,23 @@
 
   document.addEventListener("visibilitychange", function () {
     window.clearTimeout(estado.temporizador);
+    if (document.hidden) {
+      estado.espera = intervalo();
+      if (!estado.detenido) programar(estado.espera);
+      return;
+    }
+    // Al volver a la pestaña, el contador del título se limpia y se sondea ya.
+    limpiarNoVistas();
     if (estado.detenido) return;
     estado.espera = intervalo();
-    if (document.hidden) {
-      programar(estado.espera);
-    } else {
-      sondear();
-    }
+    sondear();
   });
+
+  window.addEventListener("focus", limpiarNoVistas);
 
   cargarPrefs();
   conectarControles();
   pintarInterruptor();
+  pintarNota();
   sondear();
 }());
