@@ -12,6 +12,11 @@ TRUST = ("confiable", "desconocido", "no_autorizado")
 SEVERITY_ORDER = {"info": 0, "warn": 1, "crit": 2}
 NOTIFY_SEVERITIES = ("warn", "crit")
 
+# Límites del panel en vivo (GET /api/live). No son configurables: el cliente
+# sondea con un cursor y una sola respuesta no debe arrastrar el historial.
+LIVE_SEVERITIES = ("warn", "crit")
+LIVE_MAX_EVENTS = 50
+
 GENERIC_HOSTNAMES = {"", "localhost", "android", "unknown", "?", "-", "none"}
 
 
@@ -510,6 +515,61 @@ def set_disposition(conn: sqlite3.Connection, event_id: int, disposicion: str) -
         raise ValueError(f"disposición inválida: {disposicion}")
     cur = conn.execute("UPDATE events SET disposicion = ? WHERE id = ?", (disposicion, event_id))
     return cur.rowcount > 0
+
+
+# --------------------------------------------------------------------------- #
+# Panel en vivo (sólo lectura, lo consume GET /api/live)
+# --------------------------------------------------------------------------- #
+def max_event_id(conn: sqlite3.Connection) -> int:
+    """Id del evento más reciente (0 si la tabla está vacía).
+
+    Es el cursor inicial del panel en vivo: al abrir o recargar no se avisa de
+    lo que ya estaba en la base.
+    """
+    row = conn.execute("SELECT COALESCE(MAX(id), 0) AS m FROM events").fetchone()
+    return int(row["m"]) if row is not None else 0
+
+
+def events_since(conn: sqlite3.Connection, after_id: int,
+                 limit: int = LIVE_MAX_EVENTS) -> list[sqlite3.Row]:
+    """Eventos warn/crit con ``id`` mayor que ``after_id``, en orden ascendente.
+
+    El cursor es el id autoincremental, no ``last_ts``: una repetición
+    deduplicada sólo actualiza la fila existente (igual que en
+    ``notification_queue``) y por tanto no vuelve a salir; una escalada
+    warn→crit inserta una fila nueva y sí se entrega.
+
+    ``limit`` se acota a 1..``LIVE_MAX_EVENTS`` para que ninguna petición
+    manual pueda pedir el historial completo.
+    """
+    limit = max(1, min(int(limit), LIVE_MAX_EVENTS))
+    return list(conn.execute(
+        "SELECT * FROM events WHERE id > ? AND severidad IN ('warn','crit') "
+        "ORDER BY id ASC LIMIT ?",
+        (int(after_id), limit),
+    ))
+
+
+def live_summary(conn: sqlite3.Connection, since_ts: int) -> dict[str, Any]:
+    """Contadores que el panel refresca sin recargar.
+
+    ``since_ts`` es el inicio del día en ms UTC (mismo criterio que el panel).
+    """
+    counts = count_devices(conn)
+    sev = event_counts(conn, since_ts)
+    total_hoy = sum(sev.values())
+    return {
+        "dispositivos": int(counts.get("total", 0)),
+        "en_linea": int(counts.get("online", 0)),
+        "desconocidos": int(counts.get("desconocidos", 0)),
+        "no_autorizados": int(counts.get("no_autorizados", 0)),
+        "alertas_hoy": {
+            "info": int(sev.get("info", 0)),
+            "warn": int(sev.get("warn", 0)),
+            "crit": int(sev.get("crit", 0)),
+            "total": int(total_hoy),
+        },
+    }
 
 
 def events_for_device(conn: sqlite3.Connection, device_id: int, limit: int = 50) -> list[sqlite3.Row]:

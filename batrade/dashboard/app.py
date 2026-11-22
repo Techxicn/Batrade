@@ -5,20 +5,25 @@ Escrituras permitidas, deliberadamente acotadas (decisión C1 del análisis):
   - scan_requests (botón de escaneo manual)
   - events.disposicion (marcar falso positivo, para el KPI)
 El sensor es el único que escribe eventos, puertos y cola de notificación.
+
+Rutas JSON: hay **una sola**, ``GET /api/live``, y es de sólo lectura. El panel
+la sondea desde ``static/live.js`` para refrescar contadores, tabla de alertas y
+latido sin recargar. Cualquier otra ruta sigue devolviendo HTML.
 """
 from __future__ import annotations
 
 import hashlib
 import hmac
 import json
+import re
 import secrets
 import sqlite3
 from datetime import datetime
 from functools import wraps
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from flask import (Flask, abort, flash, g, redirect, render_template, request,
-                   session, url_for)
+from flask import (Flask, Response, abort, flash, g, redirect, render_template,
+                   request, session, url_for)
 
 from batrade import db, store
 from batrade.inventory import approve_baseline, review_candidates
@@ -77,6 +82,76 @@ def verification_label(raw) -> dict | None:
     # El texto plano es el formato histórico de "confirmó/descartó": la
     # etiqueta "verificado" la sigue dando la columna `verified`.
     return None
+
+
+# --------------------------------------------------------------------------- #
+# Panel en vivo: serialización de la única ruta JSON (GET /api/live)
+# --------------------------------------------------------------------------- #
+LIVE_TEXT_MAX = 300
+_CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
+
+
+def _start_of_today_ms() -> int:
+    """Medianoche local en ms epoch: el mismo corte de "hoy" que usa el panel."""
+    today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
+    return int(today.timestamp() * 1000)
+
+
+def _event_detail(raw) -> dict:
+    try:
+        data = json.loads(raw or "{}")
+    except (json.JSONDecodeError, TypeError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def _clean_text(value: Any, limit: int = LIVE_TEXT_MAX) -> str | None:
+    """Texto de red saneado para JSON: sin controles, en una línea y recortado.
+
+    No escapa HTML a propósito: la respuesta va como ``application/json`` y el
+    cliente pinta con ``textContent``. El serializador añade además el escape
+    ``\\u003c`` / ``\\u003e`` / ``\\u0026`` como segunda barrera.
+    """
+    if value is None:
+        return None
+    text = _CONTROL_CHARS.sub("", str(value).replace("\r", " ").replace("\n", " "))
+    text = " ".join(text.split())
+    if len(text) > limit:
+        text = text[: limit - 1].rstrip() + "…"
+    return text or None
+
+
+def _live_event(row: sqlite3.Row) -> dict[str, Any]:
+    """Evento warn/crit con el texto ya saneado para el sondeo del panel.
+
+    ``detalle_json`` manda sobre las columnas: un evento que trae su par
+    origen/destino completo no pierde información, y si no lo trae se usan las
+    columnas del propio evento.
+    """
+    det = _event_detail(row["detalle_json"])
+    return {
+        "id": int(row["id"]),
+        "severidad": str(row["severidad"]),
+        "tipo": _clean_text(row["tipo"]) or "",
+        "ts": int(row["last_ts"]),
+        "resumen": _clean_text(det.get("resumen")),
+        "por_que": _clean_text(det.get("por_que")),
+        "accion": _clean_text(det.get("accion")),
+        "ip_origen": _clean_text(det.get("ip_origen") or row["ip_origen"]),
+        "mac_origen": _clean_text(det.get("mac_origen") or row["mac_origen"]),
+        "ip_destino": _clean_text(det.get("ip_destino") or row["ip_destino"]),
+        "mac_destino": _clean_text(det.get("mac_destino")),
+    }
+
+
+def _json_response(payload: dict[str, Any], status: int = 200) -> Response:
+    """JSON sin caché y con ``<``/``>``/``&`` escapados (defensa en profundidad)."""
+    body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
+    body = (body.replace("<", "\\u003c").replace(">", "\\u003e")
+            .replace("&", "\\u0026"))
+    resp = Response(body, status=status, mimetype="application/json")
+    resp.headers["Cache-Control"] = "no-store"
+    return resp
 
 
 def create_app(cfg: Config) -> Flask:
@@ -140,6 +215,9 @@ def create_app(cfg: Config) -> Flask:
         if endpoint in ("static", "login"):
             return None
         if cfg.dashboard.auth_token and not session.get("auth"):
+            if endpoint == "api_live":
+                # Un GET de datos no puede acabar en el HTML del login: 401 JSON.
+                return _json_response({"error": "sesión requerida"}, 401)
             return redirect(url_for("login", next=request.path))
         if request.method == "POST":
             sent = request.form.get("csrf") or request.headers.get("X-CSRF", "")
@@ -205,8 +283,7 @@ def create_app(cfg: Config) -> Flask:
     def index():  # noqa: ANN202
         conn = get_db()
         counts = store.count_devices(conn)
-        today = datetime.now().replace(hour=0, minute=0, second=0, microsecond=0)
-        since = int(today.timestamp() * 1000)
+        since = _start_of_today_ms()
         sev = store.event_counts(conn, since)
         recent = store.list_events(conn, limit=8)
         base = baseline_status(conn)
@@ -293,6 +370,44 @@ def create_app(cfg: Config) -> Flask:
         except ValueError as exc:
             flash(str(exc), "error")
         return redirect(request.referrer or url_for("events"))
+
+    # ---------------------------------------------------- panel en vivo (JSON)
+    @app.route("/api/live")
+    def api_live() -> Response:
+        """Única ruta JSON del panel; sólo lectura (GET).
+
+        ``?after=<id>`` entrega los eventos warn/crit posteriores al cursor, en
+        orden ascendente y con tope de 50. Sin ``after`` sólo se devuelven el
+        cursor inicial (``max_id``), el resumen y el latido: abrir o recargar el
+        panel no dispara una avalancha de avisos. Las repeticiones deduplicadas
+        no crean filas nuevas y por tanto no se repiten; una escalada warn→crit
+        sí llega con su id nuevo.
+
+        ``max_id`` se lee **antes** que los eventos para que el cursor del
+        cliente nunca pueda saltarse una fila insertada mientras se responde.
+        """
+        conn = get_db()
+        payload: dict[str, Any] = {"max_id": store.max_event_id(conn)}
+        raw_after = request.args.get("after")
+        if raw_after is not None:
+            try:
+                after = int(raw_after)
+            except (TypeError, ValueError):
+                return _json_response({"error": "after debe ser un entero"}, 400)
+            if after < 0:
+                return _json_response({"error": "after no puede ser negativo"}, 400)
+            payload["eventos"] = [
+                _live_event(row)
+                for row in store.events_since(conn, after, limit=store.LIVE_MAX_EVENTS)
+            ]
+        payload["resumen"] = store.live_summary(conn, _start_of_today_ms())
+        health = _health(conn)
+        payload["sensor"] = {
+            "vivo": not health["stale"],
+            "edad_s": (None if health["age"] is None
+                       else max(0, int(health["age"] // 1000))),
+        }
+        return _json_response(payload)
 
     # ------------------------------------------------------------- línea base
     @app.route("/learning")
