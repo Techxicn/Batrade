@@ -462,6 +462,7 @@ def create_app(cfg: Config) -> Flask:
                                caps_summary=caps.summary(), mode_notes=mode_notes,
                                udp_note=udp_note,
                                tools=tools, heartbeat=hb, db_size=size,
+                               failed_scans=store.recent_failed_scans(conn),
                                requests=list(conn.execute(
                                    "SELECT * FROM scan_requests ORDER BY id DESC LIMIT 20")),
                                effective_mode=mode)

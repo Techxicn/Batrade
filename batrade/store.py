@@ -631,6 +631,21 @@ def tool_status(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return list(conn.execute("SELECT * FROM tool_status ORDER BY herramienta"))
 
 
+def recent_failed_scans(conn: sqlite3.Connection, limit: int = 5) -> list[sqlite3.Row]:
+    """Últimos escaneos con estado ``error``, con la IP del equipo.
+
+    ``error`` guarda el mensaje para el operador (qué pasó y qué hacer), no el
+    volcado del parser; /health lo muestra tal cual.
+    """
+    limit = max(1, min(int(limit), 20))
+    return list(conn.execute(
+        "SELECT s.id, s.perfil, s.fin, s.error, COALESCE(d.ip_actual, '—') AS ip "
+        "FROM scans s LEFT JOIN devices d ON d.id = s.device_id "
+        "WHERE s.estado = 'error' ORDER BY s.id DESC LIMIT ?",
+        (limit,),
+    ))
+
+
 def purge(conn: sqlite3.Connection, before_ts: int) -> dict[str, Any]:
     """Retención: elimina datos y artefactos anteriores a ``before_ts`` (RNF-06).
 

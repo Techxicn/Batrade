@@ -73,6 +73,31 @@ class ScanError(RuntimeError):
     pass
 
 
+# Lo que ve el operador cuando el objetivo no da resultado. No es un fallo de la
+# herramienta: nmap funciona, es el equipo el que no responde o filtra paquetes.
+TARGET_UNREACHABLE = (
+    "El escaneo de {ip} no terminó (el equipo no responde o filtra paquetes). "
+    "Se reintentará más tarde; puedes excluirlo en scan.exclude"
+)
+
+
+class TargetScanError(ScanError):
+    """El objetivo no dio un resultado utilizable: timeout o XML incompleto.
+
+    Es un fallo **del objetivo**, no de la herramienta: no debe incrementar
+    ``tool_status.fallos_consecutivos`` (eso es para un nmap roto) y sí dejar la
+    fila de ``scans`` en ``error``, que es lo que frena el reintento inmediato.
+    """
+
+    def __init__(self, ip: str, motivo: str, detalle: str = "") -> None:
+        self.ip = ip
+        self.motivo = motivo  # "timeout" | "XML incompleto"
+        self.detalle = detalle
+        # Texto exacto para el operador, tal cual va a `scans.error` y a /health.
+        self.mensaje = TARGET_UNREACHABLE.format(ip=ip)
+        super().__init__(f"{motivo}: {detalle}" if detalle else motivo)
+
+
 @dataclass(slots=True)
 class ScanResult:
     target: str
@@ -153,8 +178,10 @@ def run_scan(cfg: Config, target: str, profile: str = "standard",
         result.exit_code = proc.returncode
         stderr = proc.stderr.strip()
     except subprocess.TimeoutExpired:
+        # Un nmap muerto por timeout deja el XML a medias: ni se intenta parsear.
         _safe_unlink(xml_path)
-        raise ScanError(f"nmap excedió {limit}s en {target}")
+        raise TargetScanError(target, "timeout",
+                              f"nmap excedió {limit}s") from None
     except OSError as exc:
         raise ScanError(f"no se pudo ejecutar nmap: {exc}") from exc
 
@@ -164,7 +191,10 @@ def run_scan(cfg: Config, target: str, profile: str = "standard",
     try:
         parsed = parse_xml(xml_path)
     except Exception as exc:
-        raise ScanError(f"XML de nmap inválido: {exc}") from exc
+        # Cabecera sin cierre o archivo vacío: el intento fallido no se queda en
+        # disco esperando a la retención de 90 días.
+        _safe_unlink(xml_path)
+        raise TargetScanError(target, "XML incompleto", str(exc)[:200]) from exc
     result.ports = parsed["ports"]
     result.hostnames = parsed["hostnames"]
     try:

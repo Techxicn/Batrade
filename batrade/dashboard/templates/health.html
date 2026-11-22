@@ -115,6 +115,27 @@
 </section>
 
 <section class="card">
+  <header class="card-head"><h2>Escaneos sin resultado</h2></header>
+  {% if failed_scans %}
+  <table class="table compact">
+    <thead><tr><th>Objetivo</th><th>Perfil</th><th>Cuándo</th><th>Qué pasó</th></tr></thead>
+    <tbody>
+    {% for s in failed_scans %}
+      <tr>
+        <td class="mono">{{ s["ip"] }}</td>
+        <td>{{ s["perfil"] }}</td>
+        <td title="{{ s['fin']|ts if s['fin'] else '' }}">{{ s["fin"]|ago if s["fin"] else "—" }}</td>
+        <td class="small">{{ s["error"] or "" }}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="empty">Ningún escaneo ha fallado.</p>
+  {% endif %}
+</section>
+
+<section class="card">
   <header class="card-head"><h2>Solicitudes de escaneo</h2></header>
   {% if requests %}
   <table class="table compact">
