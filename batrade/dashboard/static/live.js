@@ -114,6 +114,10 @@
     // base no genera avisos.
     if (primera) estado.cursor = maxId;
 
+    // Contadores y latido se refrescan en cualquier página, también al abrir.
+    actualizarContadores(datos.resumen);
+    actualizarLatido(datos.sensor);
+
     var nuevos = [];
     for (var i = 0; i < eventos.length; i++) {
       var ev = eventos[i];
@@ -133,6 +137,7 @@
     if (primera) return;
     if (!nuevos.length) return;
 
+    insertarEnTabla(nuevos);
     presentar(nuevos);
   }
 
@@ -230,6 +235,191 @@
         if (el.parentNode) el.parentNode.removeChild(el);
       }, AVISO_WARN_MS);
     }
+  }
+
+  // ------------------------------------------------ actualización sin recargar
+  var MAX_FILAS = 300;  // mismo tope que la ruta /events
+
+  function texto(selector, valor) {
+    if (valor === null || valor === undefined) return;
+    var el = document.querySelector(selector);
+    if (!el) return;
+    var nuevo = String(valor);
+    if (el.textContent !== nuevo) el.textContent = nuevo;  // nunca innerHTML
+  }
+
+  function color(selector, valor, clase) {
+    var el = document.querySelector(selector);
+    if (!el) return;
+    el.classList.toggle(clase, Number(valor) > 0);
+  }
+
+  function actualizarContadores(resumen) {
+    if (!resumen || typeof resumen !== "object") return;
+    var alertas = resumen.alertas_hoy || {};
+    texto("[data-live='en-linea']", Number(resumen.en_linea) || 0);
+    texto("[data-live='total']", "de " + (Number(resumen.dispositivos) || 0) + " conocidos");
+    texto("[data-live='desconocidos']", Number(resumen.desconocidos) || 0);
+    texto("[data-live='no-autorizados']", Number(resumen.no_autorizados) || 0);
+    texto("[data-live='alertas-crit']", Number(alertas.crit) || 0);
+    texto("[data-live='alertas-sub']", (Number(alertas.warn) || 0) + " advertencias · " +
+      (Number(alertas.info) || 0) + " info");
+    color("[data-live='desconocidos']", resumen.desconocidos, "warn-text");
+    color("[data-live='no-autorizados']", resumen.no_autorizados, "crit-text");
+    color("[data-live='alertas-crit']", alertas.crit, "crit-text");
+  }
+
+  function actualizarLatido(sensor) {
+    var pill = document.getElementById("live-heartbeat");
+    if (!pill || !sensor || typeof sensor.vivo !== "boolean") return;
+    var modo = pill.dataset.liveMode || "";
+    pill.textContent = (sensor.vivo ? "sensor vivo" : "sensor sin latido") +
+      (modo ? " · " + modo : "");
+    pill.classList.toggle("ok", sensor.vivo);
+    pill.classList.toggle("bad", !sensor.vivo);
+    pill.title = (typeof sensor.edad_s === "number")
+      ? "Latido hace " + sensor.edad_s + " s"
+      : "Sin latido registrado";
+  }
+
+  function insertarEnTabla(eventos) {
+    var tbody = document.getElementById("events-tbody");
+    if (!tbody) return;
+    var filtroSev = tbody.dataset.sev || "";
+    var filtroTipo = tbody.dataset.tipo || "";
+    var agregados = 0;
+    // Llegan en orden ascendente. Insertar cada uno arriba deja el más nuevo
+    // en la primera fila.
+    for (var i = 0; i < eventos.length; i++) {
+      var ev = eventos[i];
+      if (!ev) continue;
+      if (filtroSev && ev.severidad !== filtroSev) continue;
+      if (filtroTipo && ev.tipo !== filtroTipo) continue;
+      if (tbody.querySelector("tr[data-evento-id='" + String(ev.id) + "']")) continue;
+      tbody.insertBefore(filaEvento(ev, tbody.dataset.csrf || ""), tbody.firstElementChild);
+      agregados++;
+    }
+    if (!agregados) return;
+    while (tbody.children.length > MAX_FILAS) {
+      tbody.removeChild(tbody.lastElementChild);
+    }
+    var tabla = document.getElementById("events-table");
+    if (tabla) tabla.hidden = false;
+    var vacio = document.getElementById("events-empty");
+    if (vacio) vacio.hidden = true;
+    texto("#events-count", tbody.children.length + " mostradas (máx. 300)");
+  }
+
+  function celda(clase) {
+    var td = document.createElement("td");
+    if (clase) td.className = clase;
+    return td;
+  }
+
+  function anadirLinea(caja, etiqueta, valor) {
+    if (!valor) return;
+    var p = document.createElement("p");
+    p.className = "muted small";
+    p.textContent = etiqueta + ": " + String(valor);
+    caja.appendChild(p);
+  }
+
+  function fecha(ms) {
+    var d = new Date(Number(ms) || 0);
+    try {
+      return d.toLocaleString("es-ES", { hour12: false });
+    } catch (error) {
+      return d.toISOString();
+    }
+  }
+
+  function filaEvento(ev, csrf) {
+    var tr = document.createElement("tr");
+    tr.setAttribute("data-evento-id", String(ev.id));
+
+    var tdSev = celda();
+    var chip = document.createElement("span");
+    chip.className = "chip " + (ev.severidad === "crit" ? "crit" : "warn");
+    chip.textContent = ETIQUETA_SEV[ev.severidad] || String(ev.severidad || "");
+    tdSev.appendChild(chip);
+    tr.appendChild(tdSev);
+
+    var tdEvento = celda();
+    var detalle = document.createElement("details");
+    var resumenEl = document.createElement("summary");
+    resumenEl.textContent = String(ev.tipo || "Alerta");
+    detalle.appendChild(resumenEl);
+    var caja = document.createElement("div");
+    caja.className = "detail";
+    anadirLinea(caja, "Qué pasó", ev.resumen);
+    anadirLinea(caja, "Por qué importa", ev.por_que);
+    anadirLinea(caja, "Qué hacer", ev.accion);
+    var meta = document.createElement("small");
+    meta.className = "muted";
+    meta.textContent = "en vivo · primera vez: " + fecha(ev.ts);
+    caja.appendChild(meta);
+    detalle.appendChild(caja);
+    tdEvento.appendChild(detalle);
+    tr.appendChild(tdEvento);
+
+    var tdOrigen = celda("mono small");
+    tdOrigen.appendChild(document.createTextNode(ev.ip_origen || "—"));
+    tdOrigen.appendChild(document.createElement("br"));
+    tdOrigen.appendChild(document.createTextNode(ev.mac_origen || ""));
+    tr.appendChild(tdOrigen);
+
+    var tdDestino = celda("mono small");
+    tdDestino.textContent = ev.ip_destino || "—";
+    tr.appendChild(tdDestino);
+
+    var tdCuando = celda();
+    tdCuando.setAttribute("title", fecha(ev.ts));
+    tdCuando.textContent = "ahora";
+    tr.appendChild(tdCuando);
+
+    var tdRep = celda("mono");
+    tdRep.textContent = "1";
+    tr.appendChild(tdRep);
+
+    tr.appendChild(celdaKpi(ev, csrf));
+    return tr;
+  }
+
+  function celdaKpi(ev, csrf) {
+    var td = celda();
+    var form = document.createElement("form");
+    form.className = "inline";
+    form.setAttribute("method", "post");
+    var base = cuerpo.dataset.eventsUrl || "/events";
+    form.setAttribute("action", base.replace(/\/$/, "") + "/" +
+      encodeURIComponent(String(ev.id)) + "/disposicion");
+
+    var token = document.createElement("input");
+    token.type = "hidden";
+    token.name = "csrf";
+    token.value = csrf;
+    form.appendChild(token);
+
+    var select = document.createElement("select");
+    select.name = "disposicion";
+    var opciones = [
+      { valor: "sin_evaluar", texto: "sin evaluar" },
+      { valor: "tp", texto: "real" },
+      { valor: "fp", texto: "falso positivo" }
+    ];
+    for (var i = 0; i < opciones.length; i++) {
+      var opt = document.createElement("option");
+      opt.value = opciones[i].valor;
+      opt.textContent = opciones[i].texto;
+      select.appendChild(opt);
+    }
+    select.value = "sin_evaluar";
+    select.addEventListener("change", function () {
+      form.submit();
+    });
+    form.appendChild(select);
+    td.appendChild(form);
+    return td;
   }
 
   // --------------------------------------------------------------- sonido

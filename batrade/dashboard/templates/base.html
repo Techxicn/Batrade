@@ -33,7 +33,8 @@
     </details>
     <span class="live-note" id="live-note" hidden></span>
   </div>
-  <div class="pill {{ 'ok' if not health.stale else 'bad' }}">
+  <div class="pill {{ 'ok' if not health.stale else 'bad' }}" id="live-heartbeat"
+       data-live-mode="{{ mode }}" title="Latido del sensor">
     {{ 'sensor vivo' if not health.stale else 'sensor sin latido' }} · {{ mode }}
   </div>
 </header>

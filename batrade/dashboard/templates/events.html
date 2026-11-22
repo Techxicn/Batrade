@@ -5,7 +5,7 @@
 <section class="card">
   <header class="card-head">
     <h2>Historial de alertas</h2>
-    <span class="muted">{{ events|length }} mostradas (máx. 300)</span>
+    <span class="muted" id="events-count">{{ events|length }} mostradas (máx. 300)</span>
   </header>
 
   <form class="filters" method="get" action="{{ url_for('events') }}">
@@ -25,15 +25,17 @@
     <a class="btn ghost" href="{{ url_for('events') }}">Limpiar</a>
   </form>
 
-  {% if events %}
-  <table class="table">
+  {# La tabla se renderiza siempre para que el panel en vivo pueda insertar
+     filas sin recargar; sin eventos queda oculta tras el aviso. #}
+  <table class="table" id="events-table" {% if not events %}hidden{% endif %}>
     <thead>
       <tr><th>Severidad</th><th>Evento</th><th>Origen</th><th>Destino</th>
           <th>Cuándo</th><th>Rep.</th><th>KPI</th></tr>
     </thead>
-    <tbody>
+    <tbody id="events-tbody" data-csrf="{{ csrf }}"
+           data-sev="{{ filtro.severidad }}" data-tipo="{{ filtro.tipo }}">
     {% for e in events %}
-      <tr>
+      <tr data-evento-id="{{ e['id'] }}">
         <td><span class="chip {{ e['severidad'] }}">{{ sev_label[e['severidad']] }}</span></td>
         <td>
           {% set v = e["detalle_json"]|verif %}
@@ -67,9 +69,7 @@
     {% endfor %}
     </tbody>
   </table>
-  {% else %}
-  <p class="empty">Sin alertas con ese filtro.</p>
-  {% endif %}
+  <p class="empty" id="events-empty" {% if events %}hidden{% endif %}>Sin alertas con ese filtro.</p>
 </section>
 
 {% endblock %}
