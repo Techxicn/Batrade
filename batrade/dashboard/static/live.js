@@ -19,6 +19,12 @@
   var MAX_ESPERA_MS = 30000;  // techo del retroceso exponencial
   var TOPE_EVENTOS = 50;      // store.LIVE_MAX_EVENTS
 
+  // Avisos dentro de la página
+  var MAX_AVISOS = 4;         // máximo de pop-ups visibles a la vez
+  var AVISO_WARN_MS = 10000;  // un warn desaparece solo; un crit espera al cierre
+  var RAFAGA_MAX = 3;         // más de 3 en un ciclo => un único aviso agrupado
+  var ETIQUETA_SEV = { crit: "Crítico", warn: "Advertencia", info: "Informativo" };
+
   var estado = {
     cursor: null,             // id del último evento warn/crit entregado
     vistos: Object.create(null),
@@ -116,6 +122,82 @@
     }
     if (primera) return;
     if (!nuevos.length) return;
+
+    presentar(nuevos);
+  }
+
+  function presentar(eventos) {
+    var destino = cuerpo.dataset.eventsUrl || "/events";
+    // Una ráfaga no puede tapar el panel: un solo aviso con el recuento.
+    if (eventos.length > RAFAGA_MAX) {
+      var peor = "warn";
+      for (var i = 0; i < eventos.length; i++) {
+        if (eventos[i].severidad === "crit") peor = "crit";
+      }
+      aviso(peor, eventos.length + " alertas nuevas",
+        "Se agruparon para no tapar el panel.", destino);
+      return;
+    }
+    for (var j = 0; j < eventos.length; j++) {
+      var ev = eventos[j];
+      aviso(ev.severidad, ev.tipo || "Alerta", ev.resumen || null, destino);
+    }
+  }
+
+  function aviso(severidad, titulo, texto, enlace) {
+    var caja = document.getElementById("live-alerts");
+    if (!caja) return;
+    var critico = severidad === "crit";
+    // El más viejo se descarta al llegar al tope; los nuevos entran arriba.
+    while (caja.children.length >= MAX_AVISOS) {
+      caja.removeChild(caja.lastElementChild);
+    }
+
+    var el = document.createElement("div");
+    el.className = "live-alert " + (critico ? "crit" : "warn");
+
+    var cabecera = document.createElement("div");
+    cabecera.className = "live-alert-head";
+    var chip = document.createElement("span");
+    chip.className = "chip " + (critico ? "crit" : "warn");
+    chip.textContent = ETIQUETA_SEV[severidad] || ETIQUETA_SEV.warn;
+    var cerrar = document.createElement("button");
+    cerrar.type = "button";
+    cerrar.className = "live-alert-close";
+    cerrar.setAttribute("aria-label", "Cerrar aviso");
+    cerrar.textContent = "×";
+    cerrar.addEventListener("click", function () {
+      if (el.parentNode) el.parentNode.removeChild(el);
+    });
+    cabecera.appendChild(chip);
+    cabecera.appendChild(cerrar);
+
+    var tituloEl = document.createElement("p");
+    tituloEl.className = "live-alert-title";
+    tituloEl.textContent = String(titulo || "Alerta");
+
+    el.appendChild(cabecera);
+    el.appendChild(tituloEl);
+    if (texto) {
+      var parrafo = document.createElement("p");
+      parrafo.className = "live-alert-text";
+      parrafo.textContent = String(texto);
+      el.appendChild(parrafo);
+    }
+    if (enlace) {
+      var ir = document.createElement("a");
+      ir.setAttribute("href", enlace);
+      ir.textContent = "Ver alertas →";
+      el.appendChild(ir);
+    }
+
+    caja.insertBefore(el, caja.firstElementChild);
+    // Los crit se quedan hasta que el usuario los cierre.
+    if (!critico) {
+      window.setTimeout(function () {
+        if (el.parentNode) el.parentNode.removeChild(el);
+      }, AVISO_WARN_MS);
+    }
   }
 
   document.addEventListener("visibilitychange", function () {
