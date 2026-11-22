@@ -316,6 +316,50 @@ chmod 600 .env
 
 Every alert answers *what happened / why it matters / what to do*, plus event, time, source/destination and accumulated repetitions. A failed delivery never loses the event: it stays queued with backoff and visible in the panel.
 
+## Panel en vivo
+
+El panel ya no necesita recargar para enseñar lo que llega. Cada `dashboard.live_poll_s`
+segundos (3 por defecto, rango 1..60) el navegador pide `GET /api/live` —la única ruta
+JSON del proyecto y de sólo lectura— y con esa respuesta actualiza los contadores de
+*Panel*, la tabla de *Alertas*, el latido del sensor y los avisos emergentes. Sin
+WebSockets ni SSE: un `GET` cada pocos segundos.
+
+- **Cursor, no historial.** La primera respuesta sólo trae `max_id`, el resumen y el
+  latido; a partir de ahí el cliente pide `?after=<id>`. Abrir o recargar el panel no
+  dispara avisos de lo que ya estaba en la base. Las repeticiones deduplicadas no vuelven
+  a salir (igual que en las notificaciones del sensor); una escalada de `warn` a `crit`
+  sí llega, porque es un evento nuevo con su propio id.
+- **Pop-ups.** Hasta cuatro a la vez. Un `crit` se queda hasta que lo cierres; un `warn`
+  desaparece a los 10 s. Si en un ciclo llegan más de tres, se agrupan en un solo aviso
+  «N alertas nuevas».
+- **Sonido.** Web Audio sintetizado, sin archivos ni CDN: un tono para `warn` y un doble
+  tono más grave para `crit`, como mucho uno cada 5 s. El interruptor «Avisos» de la
+  barra guarda las preferencias (sonido, notificaciones, sólo críticas) en
+  `localStorage`.
+- **Notificaciones y título.** Con contexto seguro y permiso concedido, cada alerta
+  genera una notificación que al pulsarla enfoca la pestaña y abre `/events`; fuera de la
+  pestaña el título pasa a `(N) Batrade` y se limpia al volver.
+
+### Límites que conviene conocer
+
+- **El sonido exige un clic.** Los navegadores no permiten audio antes de una
+  interacción: hasta que pulses «Avisos» el panel está en silencio. Si la preferencia
+  sobrevive a una recarga, el primer clic o tecla de la página vuelve a habilitarlo.
+- **Notificaciones sólo en contexto seguro.** `localhost` y `127.0.0.1` cuentan como
+  seguros; por HTTP con una IP de la LAN no lo son. En ese caso el aviso se queda en el
+  pop-up de la página y la barra explica el motivo (lo mismo si el navegador no admite
+  notificaciones o si el permiso está bloqueado).
+- **Pestaña cerrada, no hay panel.** El sondeo vive en la página: si cierras la pestaña
+  no hay avisos, y con la pestaña oculta el ritmo baja a 15 s mientras las alertas se
+  acumulan en el título. Los canales de Telegram y Discord siguen siendo cosa del sensor.
+- **Sin conexión.** Si el panel no responde aparece «Sin conexión con el panel» y el
+  sondeo retrocede hasta 30 s; al volver el servidor se reanuda solo. Con
+  `DASHBOARD_TOKEN` configurado, una sesión caducada detiene el sondeo con un 401: hay
+  que volver a iniciar sesión.
+- **Qué no se refresca.** En *Dispositivos* el estado en línea no se actualiza en vivo
+  (haría falta otra ruta JSON, fuera de alcance) y los contadores de falsos positivos
+  quedan como los pintó la última carga.
+
 ## Production deployment (systemd)
 
 The `deploy/` directory contains two unit files:
@@ -395,7 +439,7 @@ pip install -e ".[dev]"    # pytest; on distribution-managed systems use a venv
 python3 -m pytest
 ```
 
-Tests cover the detection engine, rules, inventory, notification queue, store, dashboard routes, configuration, interface auto-detection, migrations, scan scheduling and close policy, UDP parsing, ARP verification, retention, `reset-db`, the installer and project metadata. They run entirely offline and without privileges, using synthetic observations and the fixtures in `fixtures/pcaps/` and `fixtures/nmap/`. CI runs the suite on Python 3.11, 3.12 and 3.13 (`.github/workflows/tests.yml`).
+Tests cover the detection engine, rules, inventory, notification queue, store, dashboard routes, the live-panel JSON endpoint and its cursor, configuration, interface auto-detection, migrations, scan scheduling and close policy, UDP parsing, ARP verification, retention, `reset-db`, the installer and project metadata. They run entirely offline and without privileges, using synthetic observations and the fixtures in `fixtures/pcaps/` and `fixtures/nmap/`. CI runs the suite on Python 3.11, 3.12 and 3.13 (`.github/workflows/tests.yml`).
 
 ## Project layout
 

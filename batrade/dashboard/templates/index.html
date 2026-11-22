@@ -5,23 +5,23 @@
 <section class="metrics">
   <article class="metric">
     <span class="metric-label">En línea</span>
-    <strong class="metric-value">{{ counts["online"] or 0 }}</strong>
-    <span class="metric-sub">de {{ counts["total"] or 0 }} conocidos</span>
+    <strong class="metric-value" data-live="en-linea">{{ counts["online"] or 0 }}</strong>
+    <span class="metric-sub" data-live="total">de {{ counts["total"] or 0 }} conocidos</span>
   </article>
   <article class="metric">
     <span class="metric-label">Desconocidos</span>
-    <strong class="metric-value {{ 'warn-text' if counts['desconocidos'] }}">{{ counts["desconocidos"] or 0 }}</strong>
+    <strong class="metric-value {{ 'warn-text' if counts['desconocidos'] }}" data-live="desconocidos">{{ counts["desconocidos"] or 0 }}</strong>
     <span class="metric-sub">pendientes de clasificar</span>
   </article>
   <article class="metric">
     <span class="metric-label">No autorizados</span>
-    <strong class="metric-value {{ 'crit-text' if counts['no_autorizados'] }}">{{ counts["no_autorizados"] or 0 }}</strong>
+    <strong class="metric-value {{ 'crit-text' if counts['no_autorizados'] }}" data-live="no-autorizados">{{ counts["no_autorizados"] or 0 }}</strong>
     <span class="metric-sub">marcados por ti</span>
   </article>
   <article class="metric">
     <span class="metric-label">Alertas hoy</span>
-    <strong class="metric-value {{ 'crit-text' if sev['crit'] }}">{{ sev["crit"] }}</strong>
-    <span class="metric-sub">{{ sev["warn"] }} advertencias · {{ sev["info"] }} info</span>
+    <strong class="metric-value {{ 'crit-text' if sev['crit'] }}" data-live="alertas-crit">{{ sev["crit"] }}</strong>
+    <span class="metric-sub" data-live="alertas-sub">{{ sev["warn"] }} advertencias · {{ sev["info"] }} info</span>
   </article>
   <article class="metric">
     <span class="metric-label">Falsos positivos hoy</span>

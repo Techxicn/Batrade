@@ -95,6 +95,8 @@ class DashboardCfg:
     host: str = "127.0.0.1"
     port: int = 8000
     auth_token: str | None = None
+    # Cadencia del sondeo de /api/live que hace el panel en vivo (segundos).
+    live_poll_s: int = 3
 
 
 @dataclass(slots=True)
@@ -357,6 +359,7 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
         host=str(_get(dash_raw, "host", "127.0.0.1")),
         port=int(_get(dash_raw, "port", 8000)),
         auth_token=os.environ.get(token_env) or None,
+        live_poll_s=int(_get(dash_raw, "live_poll_s", 3)),
     )
 
     def _path(key: str, default: str) -> Path:
@@ -432,6 +435,11 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
         errors.append(f"scan.weekly_rescan_days debe ser >= 1: {scan.weekly_rescan_days}")
     if not 1 <= dashboard.port <= 65535:
         errors.append(f"dashboard.port inválido: {dashboard.port}")
+    if not 1 <= dashboard.live_poll_s <= 60:
+        errors.append(
+            "dashboard.live_poll_s fuera de rango 1..60: "
+            f"{dashboard.live_poll_s}"
+        )
     if dashboard.host not in ("127.0.0.1", "localhost", "::1") and not dashboard.auth_token:
         errors.append(
             f"dashboard.host={dashboard.host!r} expone el panel fuera de loopback: "

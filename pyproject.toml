@@ -28,6 +28,7 @@ include = ["batrade*"]
 batrade = [
     "dashboard/templates/*.html",
     "dashboard/static/*.css",
+    "dashboard/static/*.js",
 ]
 
 [tool.pytest.ini_options]
