@@ -83,6 +83,10 @@ notify:
 dashboard:
   host: 127.0.0.1
   port: 8000
+  # Panel en vivo: cada cuántos segundos el navegador pide GET /api/live para
+  # refrescar contadores, tabla de alertas y latido sin recargar. Rango 1..60.
+  # Con la pestaña oculta el cliente baja solo a 15 s.
+  live_poll_s: 3
   # Si se expone fuera de loopback, definir auth_token en .env (RNF-05).
   auth_token_env: DASHBOARD_TOKEN
 

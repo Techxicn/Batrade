@@ -1,14 +1,17 @@
 <!doctype html>
 <html lang="es">
+{# El panel en vivo no se carga en el login: sin sesión no hay nada que sondear
+   y /api/live respondería 401 en bucle. #}
+{% set en_vivo = request.endpoint != 'login' %}
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>{% block title %}Panel{% endblock %} · Batrade</title>
   <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
 </head>
-<body data-live-poll="{{ cfg.dashboard.live_poll_s }}"
+<body{% if en_vivo %} data-live-poll="{{ cfg.dashboard.live_poll_s }}"
       data-live-url="{{ url_for('api_live') }}"
-      data-events-url="{{ url_for('events') }}">
+      data-events-url="{{ url_for('events') }}"{% endif %}>
 <header class="topbar">
   <a class="brand" href="{{ url_for('index') }}">
     <span class="logo"></span> Batrade <em>Home-SOC</em>
@@ -20,6 +23,7 @@
     <a href="{{ url_for('learning') }}" class="{% if request.endpoint == 'learning' %}on{% endif %}">Línea base</a>
     <a href="{{ url_for('health_page') }}" class="{% if request.endpoint == 'health_page' %}on{% endif %}">Salud</a>
   </nav>
+  {% if en_vivo %}
   <div class="live-controls">
     <button type="button" class="live-toggle" id="live-toggle" aria-pressed="false"
             title="Activar sonido y notificaciones de alertas">Avisos: off</button>
@@ -33,6 +37,7 @@
     </details>
     <span class="live-note" id="live-note" hidden></span>
   </div>
+  {% endif %}
   <div class="pill {{ 'ok' if not health.stale else 'bad' }}" id="live-heartbeat"
        data-live-mode="{{ mode }}" title="Latido del sensor">
     {{ 'sensor vivo' if not health.stale else 'sensor sin latido' }} · {{ mode }}
@@ -40,7 +45,9 @@
 </header>
 
 <main>
+  {% if en_vivo %}
   <div class="banner warn" id="live-offline" role="status" hidden>Sin conexión con el panel</div>
+  {% endif %}
 
   {% if learning and request.endpoint != 'learning' %}
   <div class="banner">
@@ -59,8 +66,10 @@
 <footer>
   Batrade · IDS doméstico · solo metadatos, nunca contenido del tráfico
 </footer>
+{% if en_vivo %}
 <script src="{{ url_for('static', filename='live.js') }}" defer></script>
 <div class="live-alerts" id="live-alerts" role="alert" aria-live="assertive"
      aria-atomic="false" aria-label="Alertas en vivo"></div>
+{% endif %}
 </body>
 </html>

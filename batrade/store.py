@@ -12,9 +12,8 @@ TRUST = ("confiable", "desconocido", "no_autorizado")
 SEVERITY_ORDER = {"info": 0, "warn": 1, "crit": 2}
 NOTIFY_SEVERITIES = ("warn", "crit")
 
-# Límites del panel en vivo (GET /api/live). No son configurables: el cliente
-# sondea con un cursor y una sola respuesta no debe arrastrar el historial.
-LIVE_SEVERITIES = ("warn", "crit")
+# Tope de eventos por respuesta de GET /api/live: el panel sondea con un cursor
+# y una sola respuesta no debe arrastrar el historial.
 LIVE_MAX_EVENTS = 50
 
 GENERIC_HOSTNAMES = {"", "localhost", "android", "unknown", "?", "-", "none"}

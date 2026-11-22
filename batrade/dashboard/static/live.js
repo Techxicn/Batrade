@@ -40,7 +40,8 @@
     audio: null,
     ultimoSonido: 0,
     noVistas: 0,              // alertas sin ver, para el título "(N) Batrade"
-    tituloOriginal: document.title
+    tituloOriginal: document.title,
+    pidiendoPermiso: false
   };
 
   function limitar(valor, minimo, maximo) {
@@ -522,13 +523,24 @@
     if (!estado.prefs.notificaciones) return;
     if (typeof window.Notification === "undefined") return;
     if (window.Notification.permission !== "default") return;
+    if (estado.pidiendoPermiso) return;  // ya hay una petición en curso
+    estado.pidiendoPermiso = true;
     try {
       var peticion = window.Notification.requestPermission();
       if (peticion && typeof peticion.then === "function") {
-        peticion.then(pintarNota, pintarNota);
+        peticion.then(function () {
+          estado.pidiendoPermiso = false;
+          pintarNota();
+        }, function () {
+          estado.pidiendoPermiso = false;
+          pintarNota();
+        });
+      } else {
+        estado.pidiendoPermiso = false;
       }
     } catch (error) {
       // Navegadores con callback: el permiso queda como estaba.
+      estado.pidiendoPermiso = false;
     }
   }
 
@@ -655,10 +667,12 @@
   }
 
   // Si la preferencia "activado" sobrevivió a la recarga, el primer gesto en la
-  // página es lo que desbloquea el audio.
+  // página es lo que desbloquea el audio y, si falta, pide el permiso de
+  // notificaciones (los navegadores sólo lo conceden tras una interacción).
   function desbloquearConGesto() {
-    if (!estado.activado || estado.audio || !estado.prefs.sonido) return;
-    contextoAudio();
+    if (!estado.activado) return;
+    if (!estado.audio && estado.prefs.sonido) contextoAudio();
+    if (estado.prefs.notificaciones) pedirPermisoNotificaciones();
   }
   document.addEventListener("click", desbloquearConGesto);
   document.addEventListener("keydown", desbloquearConGesto);
