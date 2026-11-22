@@ -25,12 +25,20 @@
   var RAFAGA_MAX = 3;         // más de 3 en un ciclo => un único aviso agrupado
   var ETIQUETA_SEV = { crit: "Crítico", warn: "Advertencia", info: "Informativo" };
 
+  // Sonido sintetizado (Web Audio, sin archivos) y preferencias
+  var CLAVE_PREFS = "batrade.live.prefs";
+  var SONIDO_MIN_MS = 5000;   // como mucho un sonido cada 5 s
+
   var estado = {
     cursor: null,             // id del último evento warn/crit entregado
     vistos: Object.create(null),
     temporizador: null,
     espera: POLL_MS,
-    detenido: false
+    detenido: false,
+    activado: false,          // interruptor "Avisos": silencio hasta el clic
+    prefs: { sonido: true, notificaciones: true, soloCriticas: false },
+    audio: null,
+    ultimoSonido: 0
   };
 
   function limitar(valor, minimo, maximo) {
@@ -128,18 +136,26 @@
 
   function presentar(eventos) {
     var destino = cuerpo.dataset.eventsUrl || "/events";
+    var visibles = [];
+    var peor = "warn";
+    for (var i = 0; i < eventos.length; i++) {
+      if (estado.prefs.soloCriticas && eventos[i].severidad !== "crit") continue;
+      visibles.push(eventos[i]);
+      if (eventos[i].severidad === "crit") peor = "crit";
+    }
+    if (!visibles.length) return;
+
+    // Un solo sonido por ciclo, con la severidad más alta del lote.
+    sonar(peor);
+
     // Una ráfaga no puede tapar el panel: un solo aviso con el recuento.
-    if (eventos.length > RAFAGA_MAX) {
-      var peor = "warn";
-      for (var i = 0; i < eventos.length; i++) {
-        if (eventos[i].severidad === "crit") peor = "crit";
-      }
-      aviso(peor, eventos.length + " alertas nuevas",
+    if (visibles.length > RAFAGA_MAX) {
+      aviso(peor, visibles.length + " alertas nuevas",
         "Se agruparon para no tapar el panel.", destino);
       return;
     }
-    for (var j = 0; j < eventos.length; j++) {
-      var ev = eventos[j];
+    for (var j = 0; j < visibles.length; j++) {
+      var ev = visibles[j];
       aviso(ev.severidad, ev.tipo || "Alerta", ev.resumen || null, destino);
     }
   }
@@ -200,6 +216,171 @@
     }
   }
 
+  // --------------------------------------------------------------- sonido
+  // Web Audio sintetizado: sin archivos ni red. El AudioContext sólo se crea
+  // tras un gesto del usuario (política de autoplay de los navegadores).
+  function contextoAudio() {
+    if (!estado.activado || !estado.prefs.sonido) return null;
+    var Constructor = window.AudioContext || window.webkitAudioContext;
+    if (!Constructor) return null;
+    if (!estado.audio) {
+      try {
+        estado.audio = new Constructor();
+      } catch (error) {
+        estado.audio = null;
+        return null;
+      }
+    }
+    if (estado.audio.state === "suspended") {
+      var reanudar = estado.audio.resume();
+      if (reanudar && typeof reanudar.catch === "function") {
+        reanudar.catch(function () {});
+      }
+    }
+    return estado.audio;
+  }
+
+  function tono(ctx, frecuencia, inicio, duracion, volumen) {
+    var osc = ctx.createOscillator();
+    var ganancia = ctx.createGain();
+    osc.type = "sine";
+    osc.frequency.setValueAtTime(frecuencia, inicio);
+    ganancia.gain.setValueAtTime(0.0001, inicio);
+    ganancia.gain.exponentialRampToValueAtTime(volumen, inicio + 0.02);
+    ganancia.gain.exponentialRampToValueAtTime(0.0001, inicio + duracion);
+    osc.connect(ganancia);
+    ganancia.connect(ctx.destination);
+    osc.start(inicio);
+    osc.stop(inicio + duracion + 0.02);
+  }
+
+  function sonar(severidad) {
+    if (!estado.activado || !estado.prefs.sonido) return;
+    var ahora = Date.now();
+    if (ahora - estado.ultimoSonido < SONIDO_MIN_MS) return;
+    var ctx = contextoAudio();
+    if (!ctx) return;
+    estado.ultimoSonido = ahora;
+    var t = ctx.currentTime + 0.02;
+    if (severidad === "crit") {
+      // Doble tono más grave: inconfundible frente a una advertencia.
+      tono(ctx, 440, t, 0.18, 0.09);
+      tono(ctx, 311, t + 0.26, 0.26, 0.09);
+    } else {
+      tono(ctx, 880, t, 0.16, 0.07);
+    }
+  }
+
+  // ----------------------------------------------------------- preferencias
+  function cargarPrefs() {
+    try {
+      var crudo = window.localStorage.getItem(CLAVE_PREFS);
+      if (!crudo) return;
+      var datos = JSON.parse(crudo);
+      if (!datos || typeof datos !== "object") return;
+      if (typeof datos.activado === "boolean") estado.activado = datos.activado;
+      if (typeof datos.sonido === "boolean") estado.prefs.sonido = datos.sonido;
+      if (typeof datos.notificaciones === "boolean") {
+        estado.prefs.notificaciones = datos.notificaciones;
+      }
+      if (typeof datos.soloCriticas === "boolean") {
+        estado.prefs.soloCriticas = datos.soloCriticas;
+      }
+    } catch (error) {
+      // Modo privado, almacenamiento lleno o JSON corrupto: valores por defecto.
+    }
+  }
+
+  function guardarPrefs() {
+    try {
+      window.localStorage.setItem(CLAVE_PREFS, JSON.stringify({
+        activado: estado.activado,
+        sonido: estado.prefs.sonido,
+        notificaciones: estado.prefs.notificaciones,
+        soloCriticas: estado.prefs.soloCriticas
+      }));
+    } catch (error) {
+      // Sin almacenamiento la sesión funciona igual; sólo no se recuerda.
+    }
+  }
+
+  function pintarInterruptor() {
+    var boton = document.getElementById("live-toggle");
+    if (!boton) return;
+    boton.setAttribute("aria-pressed", estado.activado ? "true" : "false");
+    boton.textContent = estado.activado ? "Avisos: on" : "Avisos: off";
+    boton.classList.toggle("on", estado.activado);
+  }
+
+  function pedirPermisoNotificaciones() {
+    if (!estado.prefs.notificaciones) return;
+    if (typeof window.Notification === "undefined") return;
+    if (window.Notification.permission !== "default") return;
+    try {
+      var peticion = window.Notification.requestPermission();
+      if (peticion && typeof peticion.then === "function") {
+        peticion.then(function () {}, function () {});
+      }
+    } catch (error) {
+      // Navegadores con callback: el permiso queda como estaba.
+    }
+  }
+
+  function activar(activarAvisos) {
+    estado.activado = activarAvisos;
+    guardarPrefs();
+    pintarInterruptor();
+    if (activarAvisos) {
+      // Este clic es el gesto que permite crear el AudioContext.
+      contextoAudio();
+      pedirPermisoNotificaciones();
+    }
+  }
+
+  function conectarControles() {
+    var boton = document.getElementById("live-toggle");
+    if (boton) {
+      boton.addEventListener("click", function () {
+        activar(!estado.activado);
+      });
+    }
+    var sonido = document.getElementById("live-pref-sound");
+    if (sonido) {
+      sonido.checked = estado.prefs.sonido;
+      sonido.addEventListener("change", function () {
+        estado.prefs.sonido = sonido.checked;
+        guardarPrefs();
+        if (sonido.checked) contextoAudio();
+      });
+    }
+    var notificaciones = document.getElementById("live-pref-notify");
+    if (notificaciones) {
+      notificaciones.checked = estado.prefs.notificaciones;
+      notificaciones.addEventListener("change", function () {
+        estado.prefs.notificaciones = notificaciones.checked;
+        guardarPrefs();
+        if (notificaciones.checked && estado.activado) pedirPermisoNotificaciones();
+      });
+    }
+    var criticas = document.getElementById("live-pref-crit");
+    if (criticas) {
+      criticas.checked = estado.prefs.soloCriticas;
+      criticas.addEventListener("change", function () {
+        estado.prefs.soloCriticas = criticas.checked;
+        guardarPrefs();
+      });
+    }
+  }
+
+  // Si la preferencia "activado" sobrevivió a la recarga, el primer gesto en la
+  // página es lo que desbloquea el audio.
+  function desbloquearConGesto() {
+    if (!estado.activado || estado.audio || !estado.prefs.sonido) return;
+    contextoAudio();
+  }
+  document.addEventListener("click", desbloquearConGesto);
+  document.addEventListener("keydown", desbloquearConGesto);
+
   document.addEventListener("visibilitychange", function () {
     window.clearTimeout(estado.temporizador);
     if (estado.detenido) return;
@@ -211,5 +392,8 @@
     }
   });
 
+  cargarPrefs();
+  conectarControles();
+  pintarInterruptor();
   sondear();
 }());

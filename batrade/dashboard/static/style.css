@@ -353,3 +353,59 @@ code { font-family: var(--mono); font-size: 12.5px; background: #1a2330; padding
   padding: 0 2px;
 }
 .live-alert-close:hover { color: var(--text); }
+
+.live-controls { display: flex; align-items: center; gap: 6px; }
+
+.live-toggle {
+  padding: 5px 11px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.live-toggle:hover { color: var(--text); border-color: #38506a; }
+.live-toggle.on {
+  color: var(--ok);
+  border-color: rgba(52, 211, 153, .35);
+  background: rgba(52, 211, 153, .08);
+}
+
+.live-prefs { position: relative; }
+.live-prefs > summary {
+  list-style: none;
+  cursor: pointer;
+  color: var(--muted);
+  padding: 4px 8px;
+  border-radius: 6px;
+  font-size: 13px;
+  line-height: 1;
+}
+.live-prefs > summary::-webkit-details-marker { display: none; }
+.live-prefs > summary:hover { color: var(--text); background: #1a2330; }
+.live-prefs-body {
+  position: absolute;
+  right: 0;
+  top: 130%;
+  z-index: 40;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 230px;
+  padding: 10px 12px;
+  background: var(--panel);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, .45);
+}
+.live-prefs-body label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+}
