@@ -328,6 +328,17 @@ def test_sonido_crit_no_espera_la_ventana_de_warn(cfg):
     assert "esperaSonido(severidad)" in fuente
 
 
+def test_sondeo_aborta_a_los_10s(cfg):
+    """Gancho del tope: AbortController, 10 s y el reloj siempre cancelado."""
+    fuente = _live_js()
+    assert "TIEMPO_MAX_MS = 10000" in fuente
+    assert "new window.AbortController()" in fuente
+    assert "opciones.signal = control.signal" in fuente
+    assert "control.abort()" in fuente
+    # El temporizador del tope no puede sobrevivir a la respuesta.
+    assert fuente.count("clearTimeout(reloj)") >= 3
+
+
 # --------------------------------------------------------------------------- #
 # Configuración de la cadencia
 # --------------------------------------------------------------------------- #

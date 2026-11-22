@@ -17,6 +17,7 @@
   var POLL_MS = limitar(parseInt(cuerpo.dataset.livePoll, 10) || 3, 1, 60) * 1000;
   var OCULTA_MS = 15000;      // pestaña oculta: se baja el ritmo
   var MAX_ESPERA_MS = 30000;  // techo del retroceso exponencial
+  var TIEMPO_MAX_MS = 10000;  // tope de una petición de sondeo
   var TOPE_EVENTOS = 50;      // store.LIVE_MAX_EVENTS
 
   // Avisos dentro de la página
@@ -74,12 +75,24 @@
   }
 
   function sondear() {
-    fetch(url(), {
+    var control = window.AbortController ? new window.AbortController() : null;
+    var opciones = {
       method: "GET",
       credentials: "same-origin",
       cache: "no-store",
       headers: { "Accept": "application/json" }
-    }).then(function (respuesta) {
+    };
+    if (control) opciones.signal = control.signal;
+
+    // Una petición colgada no puede dejar el panel sin sondeo: al vencer el
+    // tope se aborta y el fallo sigue el mismo camino que un error de red
+    // (retroceso exponencial y banner «Sin conexión con el panel»).
+    var reloj = window.setTimeout(function () {
+      if (control) control.abort();
+    }, TIEMPO_MAX_MS);
+
+    fetch(url(), opciones).then(function (respuesta) {
+      window.clearTimeout(reloj);
       // Con token configurado, una sesión vencida devuelve 401 (o redirige al
       // login): se detiene el sondeo en vez de martillear el servidor.
       if (respuesta.status === 401 || respuesta.redirected) {
@@ -89,11 +102,13 @@
       if (!respuesta.ok) throw new Error("HTTP " + respuesta.status);
       return respuesta.json();
     }).then(function (datos) {
+      window.clearTimeout(reloj);
       estado.espera = intervalo();
       sinConexion(false);
       alRecibir(datos);
       programar(estado.espera);
     }).catch(function (error) {
+      window.clearTimeout(reloj);
       if (estado.detenido) {
         sinConexion(true, "Sin conexión con el panel: la sesión no es válida. " +
           "Recarga la página e inicia sesión.");
