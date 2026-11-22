@@ -300,15 +300,32 @@ def test_plantillas_exponen_ganchos_del_panel_en_vivo(cfg):
     assert 'data-tipo="arp_sweep"' in filtrada
 
 
-def test_live_js_usa_textcontent_y_no_innerhtml(cfg):
+def _live_js() -> str:
     raiz = Path(__file__).resolve().parents[1]
-    fuente = (raiz / "batrade" / "dashboard" / "static" / "live.js").read_text(encoding="utf-8")
+    return (raiz / "batrade" / "dashboard" / "static" / "live.js").read_text(encoding="utf-8")
+
+
+def test_live_js_usa_textcontent_y_no_innerhtml(cfg):
+    fuente = _live_js()
     assert ".innerHTML" not in fuente
     assert "insertAdjacentHTML" not in fuente
     assert "textContent" in fuente
     # Sin dependencias: nada de cargar scripts de terceros.
     assert "http://" not in fuente and "https://" not in fuente
     assert "import " not in fuente
+
+
+def test_sonido_crit_no_espera_la_ventana_de_warn(cfg):
+    """Regla de tiempos: el warn espera 5 s; el crit sólo el mínimo de 1 s.
+
+    La comprobación fina (warn + crit a los 3 s, dos warn seguidos) se hizo en el
+    navegador; aquí queda la guarda de los umbrales y de su uso.
+    """
+    fuente = _live_js()
+    assert "SONIDO_MIN_MS = 1000" in fuente
+    assert "SONIDO_WARN_MS = 5000" in fuente
+    assert 'severidad === "crit" ? SONIDO_MIN_MS : SONIDO_WARN_MS' in fuente
+    assert "esperaSonido(severidad)" in fuente
 
 
 # --------------------------------------------------------------------------- #

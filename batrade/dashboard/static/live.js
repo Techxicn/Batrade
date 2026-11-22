@@ -27,7 +27,8 @@
 
   // Sonido sintetizado (Web Audio, sin archivos) y preferencias
   var CLAVE_PREFS = "batrade.live.prefs";
-  var SONIDO_MIN_MS = 5000;   // como mucho un sonido cada 5 s
+  var SONIDO_MIN_MS = 1000;   // nunca dos sonidos separados por menos de 1 s
+  var SONIDO_WARN_MS = 5000;  // un warn como mucho cada 5 s; un crit no espera
 
   var estado = {
     cursor: null,             // id del último evento warn/crit entregado
@@ -461,10 +462,15 @@
     osc.stop(inicio + duracion + 0.02);
   }
 
+  // Un warn respeta la ventana de 5 s; un crit solo el mínimo anti-solape de 1 s.
+  function esperaSonido(severidad) {
+    return severidad === "crit" ? SONIDO_MIN_MS : SONIDO_WARN_MS;
+  }
+
   function sonar(severidad) {
     if (!estado.activado || !estado.prefs.sonido) return;
     var ahora = Date.now();
-    if (ahora - estado.ultimoSonido < SONIDO_MIN_MS) return;
+    if (ahora - estado.ultimoSonido < esperaSonido(severidad)) return;
     var ctx = contextoAudio();
     if (!ctx) return;
     estado.ultimoSonido = ahora;
