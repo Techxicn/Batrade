@@ -17,6 +17,7 @@
   var POLL_MS = limitar(parseInt(cuerpo.dataset.livePoll, 10) || 3, 1, 60) * 1000;
   var OCULTA_MS = 15000;      // pestaña oculta: se baja el ritmo
   var MAX_ESPERA_MS = 30000;  // techo del retroceso exponencial
+  var TIEMPO_MAX_MS = 10000;  // tope de una petición de sondeo
   var TOPE_EVENTOS = 50;      // store.LIVE_MAX_EVENTS
 
   // Avisos dentro de la página
@@ -27,7 +28,8 @@
 
   // Sonido sintetizado (Web Audio, sin archivos) y preferencias
   var CLAVE_PREFS = "batrade.live.prefs";
-  var SONIDO_MIN_MS = 5000;   // como mucho un sonido cada 5 s
+  var SONIDO_MIN_MS = 1000;   // nunca dos sonidos separados por menos de 1 s
+  var SONIDO_WARN_MS = 5000;  // un warn como mucho cada 5 s; un crit no espera
 
   var estado = {
     cursor: null,             // id del último evento warn/crit entregado
@@ -73,12 +75,24 @@
   }
 
   function sondear() {
-    fetch(url(), {
+    var control = window.AbortController ? new window.AbortController() : null;
+    var opciones = {
       method: "GET",
       credentials: "same-origin",
       cache: "no-store",
       headers: { "Accept": "application/json" }
-    }).then(function (respuesta) {
+    };
+    if (control) opciones.signal = control.signal;
+
+    // Una petición colgada no puede dejar el panel sin sondeo: al vencer el
+    // tope se aborta y el fallo sigue el mismo camino que un error de red
+    // (retroceso exponencial y banner «Sin conexión con el panel»).
+    var reloj = window.setTimeout(function () {
+      if (control) control.abort();
+    }, TIEMPO_MAX_MS);
+
+    fetch(url(), opciones).then(function (respuesta) {
+      window.clearTimeout(reloj);
       // Con token configurado, una sesión vencida devuelve 401 (o redirige al
       // login): se detiene el sondeo en vez de martillear el servidor.
       if (respuesta.status === 401 || respuesta.redirected) {
@@ -88,11 +102,13 @@
       if (!respuesta.ok) throw new Error("HTTP " + respuesta.status);
       return respuesta.json();
     }).then(function (datos) {
+      window.clearTimeout(reloj);
       estado.espera = intervalo();
       sinConexion(false);
       alRecibir(datos);
       programar(estado.espera);
     }).catch(function (error) {
+      window.clearTimeout(reloj);
       if (estado.detenido) {
         sinConexion(true, "Sin conexión con el panel: la sesión no es válida. " +
           "Recarga la página e inicia sesión.");
@@ -265,6 +281,8 @@
     texto("[data-live='alertas-crit']", Number(alertas.crit) || 0);
     texto("[data-live='alertas-sub']", (Number(alertas.warn) || 0) + " advertencias · " +
       (Number(alertas.info) || 0) + " info");
+    texto("[data-live='fp']", Number(resumen.fp_hoy) || 0);
+    texto("[data-live='fp-sub']", "de " + (Number(alertas.total) || 0) + " eventos");
     color("[data-live='desconocidos']", resumen.desconocidos, "warn-text");
     color("[data-live='no-autorizados']", resumen.no_autorizados, "crit-text");
     color("[data-live='alertas-crit']", alertas.crit, "crit-text");
@@ -461,10 +479,15 @@
     osc.stop(inicio + duracion + 0.02);
   }
 
+  // Un warn respeta la ventana de 5 s; un crit solo el mínimo anti-solape de 1 s.
+  function esperaSonido(severidad) {
+    return severidad === "crit" ? SONIDO_MIN_MS : SONIDO_WARN_MS;
+  }
+
   function sonar(severidad) {
     if (!estado.activado || !estado.prefs.sonido) return;
     var ahora = Date.now();
-    if (ahora - estado.ultimoSonido < SONIDO_MIN_MS) return;
+    if (ahora - estado.ultimoSonido < esperaSonido(severidad)) return;
     var ctx = contextoAudio();
     if (!ctx) return;
     estado.ultimoSonido = ahora;

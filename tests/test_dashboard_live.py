@@ -300,15 +300,65 @@ def test_plantillas_exponen_ganchos_del_panel_en_vivo(cfg):
     assert 'data-tipo="arp_sweep"' in filtrada
 
 
-def test_live_js_usa_textcontent_y_no_innerhtml(cfg):
+def _live_js() -> str:
     raiz = Path(__file__).resolve().parents[1]
-    fuente = (raiz / "batrade" / "dashboard" / "static" / "live.js").read_text(encoding="utf-8")
+    return (raiz / "batrade" / "dashboard" / "static" / "live.js").read_text(encoding="utf-8")
+
+
+def test_live_js_usa_textcontent_y_no_innerhtml(cfg):
+    fuente = _live_js()
     assert ".innerHTML" not in fuente
     assert "insertAdjacentHTML" not in fuente
     assert "textContent" in fuente
     # Sin dependencias: nada de cargar scripts de terceros.
     assert "http://" not in fuente and "https://" not in fuente
     assert "import " not in fuente
+
+
+def test_sonido_crit_no_espera_la_ventana_de_warn(cfg):
+    """Regla de tiempos: el warn espera 5 s; el crit sólo el mínimo de 1 s.
+
+    La comprobación fina (warn + crit a los 3 s, dos warn seguidos) se hizo en el
+    navegador; aquí queda la guarda de los umbrales y de su uso.
+    """
+    fuente = _live_js()
+    assert "SONIDO_MIN_MS = 1000" in fuente
+    assert "SONIDO_WARN_MS = 5000" in fuente
+    assert 'severidad === "crit" ? SONIDO_MIN_MS : SONIDO_WARN_MS' in fuente
+    assert "esperaSonido(severidad)" in fuente
+
+
+def test_sondeo_aborta_a_los_10s(cfg):
+    """Gancho del tope: AbortController, 10 s y el reloj siempre cancelado."""
+    fuente = _live_js()
+    assert "TIEMPO_MAX_MS = 10000" in fuente
+    assert "new window.AbortController()" in fuente
+    assert "opciones.signal = control.signal" in fuente
+    assert "control.abort()" in fuente
+    # El temporizador del tope no puede sobrevivir a la respuesta.
+    assert fuente.count("clearTimeout(reloj)") >= 3
+
+
+def test_resumen_incluye_falsos_positivos_de_hoy(client, cfg):
+    conn = db.connect(cfg.paths.db)
+    ahora = now_ms()
+    fp_hoy = _evento(conn, ts=ahora, severidad="warn", clave="fp-hoy")
+    _evento(conn, ts=ahora, severidad="crit", clave="fp-nada")
+    fp_viejo = _evento(conn, ts=ahora - 3 * 86_400_000, severidad="warn", clave="fp-viejo")
+    store.set_disposition(conn, fp_hoy["event_id"], "fp")
+    store.set_disposition(conn, fp_viejo["event_id"], "fp")
+    conn.close()
+
+    resumen = client.get("/api/live").get_json()["resumen"]
+    # Sólo cuenta lo marcado como falso positivo y con avistamiento de hoy.
+    assert resumen["fp_hoy"] == 1
+    assert resumen["alertas_hoy"]["total"] >= 2
+
+    panel = client.get("/").data.decode()
+    assert 'data-live="fp">1</strong>' in panel
+    assert 'data-live="fp-sub"' in panel
+    # El cliente refresca el contador con el mismo campo del resumen.
+    assert "resumen.fp_hoy" in _live_js()
 
 
 # --------------------------------------------------------------------------- #
