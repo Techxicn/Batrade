@@ -20,7 +20,8 @@ from batrade.detect.observation import Finding
 from batrade.flow.collector import FlowCollector
 from batrade.flow.features import extract
 from batrade.flow.flow import Flow
-from batrade.flow.scorer import DummyScorer, IsolationForestScorer, Scorer
+from batrade.flow.scorer import (DummyScorer, Scorer, SegmentadoScorer,
+                                 leer_artefacto)
 
 log = logging.getLogger("batrade.flow.engine")
 
@@ -52,7 +53,7 @@ class FlowEngine:
         self.descartados = 0
 
     def _scorer_por_defecto(self) -> Scorer:
-        """Isolation Forest si hay modelo entrenado; si no, el centinela.
+        """Isolation Forest (global o por segmento) si hay modelo entrenado.
 
         Sin modelo el motor sigue arrancando (colector, features, cola) pero no
         emite nada: es preferible a puntuar con un modelo inventado.
@@ -65,12 +66,26 @@ class FlowEngine:
             log.warning("modelo no entrenado; el motor no emitirá nada (%s)", base)
             return DummyScorer()
         try:
-            modelo = IsolationForestScorer.load(ruta_npz, ruta_json)
+            artefacto = leer_artefacto(ruta_npz, ruta_json)
         except Exception as exc:  # noqa: BLE001 - fichero roto o numpy ausente
             log.warning("no se pudo cargar el modelo de flujos (%s): %s", base, exc)
             return DummyScorer()
-        log.info("modelo de flujos cargado: %s (%d flujos de entrenamiento)",
-                 base, modelo.n_flows)
+
+        modo = self.cfg.flow.segmenter
+        if modo == "segmentado" and artefacto["segmentado"] is not None:
+            modelo = SegmentadoScorer.desde_artefacto(artefacto)
+            log.info("modelo de flujos segmentado cargado: %s (k=%d, %d flujos)",
+                     base, modelo.segmenter.k, modelo.global_scorer.n_flows)
+            return modelo
+        if modo == "segmentado":
+            log.info("el modelo no trae IF por segmento; se usa el IF global (%s)", base)
+        modelo = artefacto["global"]
+        if modo == "kmeans" and artefacto["segmenter"] is not None:
+            log.info("modelo de flujos cargado con segmentador k=%d: %s (%d flujos)",
+                     artefacto["segmenter"].k, base, modelo.n_flows)
+        else:
+            log.info("modelo de flujos cargado: %s (%d flujos de entrenamiento)",
+                     base, modelo.n_flows)
         return modelo
 
     # --------------------------------------------------------------- ciclo
@@ -128,6 +143,15 @@ class FlowEngine:
         for flujo in self.collector.expire(ts):
             self._evaluar(flujo)
 
+    def _segmento(self, caracteristicas) -> int | None:
+        """Segmento del flujo, si el modelo cargado trae segmentador."""
+        if isinstance(self.scorer, SegmentadoScorer):
+            return self.scorer.segment(caracteristicas)
+        segmentador = getattr(self.scorer, "segmenter", None)
+        if segmentador is not None and getattr(segmentador, "trained", False):
+            return segmentador.segment(caracteristicas)
+        return None
+
     # ------------------------------------------------------------ puntuación
     def _evaluar(self, flujo: Flow) -> Finding | None:
         """Puntúa un flujo cerrado y devuelve el hallazgo si supera el umbral."""
@@ -135,24 +159,30 @@ class FlowEngine:
         score = float(self.scorer.score(caracteristicas))
         if score <= self.threshold:
             return None
+        detalle = {
+            "resumen": (f"Flujo anómalo {flujo.src_ip} → {flujo.dst_ip}:"
+                        f"{flujo.dst_port} ({flujo.proto}, {flujo.packets} "
+                        f"paquetes, {flujo.bytes} B), puntuación {score:.2f}"),
+            "por_que": ("El modelo de flujos puntuó esta conversación por "
+                        "encima de flow.anomaly_threshold; su forma se "
+                        "parece poco a la de los flujos normales."),
+            "accion": ("Revisa el equipo de origen y confirma si ese tráfico "
+                       "es legítimo; si lo es, márcalo como falso positivo."),
+            "features": dataclasses.asdict(caracteristicas),
+            "score": round(score, 4),
+        }
+        # El segmento no cambia el score en modo `kmeans`, pero es la traza que
+        # hace útil tenerlo cargado: se ve contra qué grupo se comparó el flujo.
+        segmento = self._segmento(caracteristicas)
+        if segmento is not None:
+            detalle["segmento"] = segmento
         hallazgo = Finding(
             tipo="flow_anomaly",
             severidad="warn",
             clave=flujo.clave,
             ip_origen=flujo.src_ip,
             ip_destino=flujo.dst_ip,
-            detalle={
-                "resumen": (f"Flujo anómalo {flujo.src_ip} → {flujo.dst_ip}:"
-                            f"{flujo.dst_port} ({flujo.proto}, {flujo.packets} "
-                            f"paquetes, {flujo.bytes} B), puntuación {score:.2f}"),
-                "por_que": ("El modelo de flujos puntuó esta conversación por "
-                            "encima de flow.anomaly_threshold; su forma se "
-                            "parece poco a la de los flujos normales."),
-                "accion": ("Revisa el equipo de origen y confirma si ese tráfico "
-                           "es legítimo; si lo es, márcalo como falso positivo."),
-                "features": dataclasses.asdict(caracteristicas),
-                "score": round(score, 4),
-            },
+            detalle=detalle,
         )
         self.emitted.append(hallazgo)
         if self.on_finding is not None:

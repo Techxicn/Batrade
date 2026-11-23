@@ -11,7 +11,9 @@ from batrade.flow.collector import FlowCollector
 from batrade.flow.engine import FlowEngine
 from batrade.flow.features import FlowFeatures, extract
 from batrade.flow.flow import Flow
-from batrade.flow.scorer import DummyScorer, IsolationForestScorer, Scorer
+from batrade.flow.scorer import (DummyScorer, IsolationForestScorer,
+                                 KMeansSegmenter, Scorer, SegmentadoScorer)
 
 __all__ = ["Flow", "FlowCollector", "FlowFeatures", "Scorer", "DummyScorer",
-           "IsolationForestScorer", "FlowEngine", "extract"]
+           "IsolationForestScorer", "KMeansSegmenter", "SegmentadoScorer",
+           "FlowEngine", "extract"]

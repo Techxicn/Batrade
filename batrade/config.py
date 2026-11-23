@@ -103,6 +103,10 @@ class FlowCfg:
     anomaly_threshold: float = 0.95
     # Ruta base del modelo entrenado, sin extensión: el código añade .npz y .json.
     model_path: Path = Path("var/flow_model")
+    # Segmentador del artefacto: none | kmeans | segmentado (D-07).
+    # kmeans usa el IF global y etiqueta cada flujo con su segmento;
+    # segmentado puntúa con el IF del segmento (cae al global si es pequeño).
+    segmenter: str = "kmeans"
 
 
 @dataclass(slots=True)
@@ -430,7 +434,11 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
         window_s=int(_get(flow_raw, "window_s", 60)),
         anomaly_threshold=float(_get(flow_raw, "anomaly_threshold", 0.95)),
         model_path=_ruta_modelo(_get(flow_raw, "model_path", "var/flow_model"), base),
+        segmenter=str(_get(flow_raw, "segmenter", "kmeans")).strip().lower(),
     )
+    if flow.segmenter not in ("none", "kmeans", "segmentado"):
+        errors.append(
+            f"flow.segmenter debe ser none, kmeans o segmentado: {flow.segmenter!r}")
     if not 1 <= flow.window_s <= 3600:
         errors.append(f"flow.window_s debe estar entre 1 y 3600: {flow.window_s}")
     if not 0.0 <= flow.anomaly_threshold <= 1.0:

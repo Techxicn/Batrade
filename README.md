@@ -214,7 +214,14 @@ The scorer is an isolation forest written against `numpy` (no scikit-learn), fed
 ```bash
 pip install '.[ml]'                      # numpy, optional extra
 python scripts/train_baseline.py --pcap fixtures/pcaps/baseline.pcap --out var/flow_model
+# with segmentation (default kmeans; `segmentado` scores per segment):
+python scripts/train_baseline.py --pcap fixtures/pcaps/baseline.pcap \
+    --out var/flow_model --segmenter segmentado
 ```
+
+`flow.segmenter` matches the flag: `none` scores with the global forest, `kmeans` keeps the same score and only labels each flow with its segment, `segmentado` scores with the forest of the flow's segment (a segment with fewer flows than the training minimum falls back to the global one). The number of segments is chosen once from the baseline (2..8, by silhouette) and stored in the JSON. `segmentado` is **experimental** (D-11): with a 60-flow synthetic baseline it *worsens* the separation (C2 0.9826 -> 0.9538, a normal flow 0.42 -> 0.83) because a 14-26 flow segment gives each score step a resolution of ~4 %. Do not enable it until you retrain with hundreds or thousands of flows per segment and the measurement improves.
+
+**What the flow engine sees, and what it does not.** The global Isolation Forest flags conversations that are globally rare: data exfiltration (large asymmetric byte counts), flows with an impossible shape, and connections to unusual destination ports. It does **not** detect long-period C2 beaconing with regular jitter (D-10): with ten per-flow features and one random feature per split, a single anomalous dimension is diluted, and a periodic beacon lands around the 97th percentile of the baseline (0.9826) rather than outside it. Beacon detection needs per-origin aggregate features and a real baseline of at least 300 flows with a maximum score <= 0.90; until that data exists the feature work is not open, and lowering the threshold will not create the capability. Port scans and host sweeps are still `SynScanRule` and `ArpSweepRule` territory, not the flow engine (D-09).
 
 That writes `var/flow_model.npz` (the trees) and `var/flow_model.json` (format version, tree count, seed, training date, pcap hash, Batrade version). Without a model — or without `numpy` — the engine falls back to `DummyScorer`, logs `modelo no entrenado` and emits nothing. There is a synthetic baseline capture in `fixtures/pcaps/baseline.pcap` (normal sessions, DNS and ARP) so the command works out of the box; retrain on a capture of *your* network before trusting it. Scores stay at or below `0.9` for flows inside the baseline and climb towards `1.0` only beyond it, so a threshold of `0.95` means "nothing like this was in the baseline" while `0.99` demands an even clearer outlier.
 
