@@ -34,6 +34,9 @@ class ConfigError(Exception):
 @dataclass(slots=True)
 class NetworkCfg:
     interface: str = "eth0"
+    # Interfaz de captura (puerto espejo). Ya resuelta: si el YAML trae null,
+    # es igual a ``interface``. Puede no tener IPv4: es lo normal en un espejo.
+    capture_interface: str = "eth0"
     cidr: str = "192.168.1.0/24"
     gateway_ip: str | None = None
     dhcp_server_ip: str | None = None
@@ -130,6 +133,8 @@ class Config:
     # Interfaz/subred resueltas automáticamente y avisos para el operador.
     interface_auto: bool = False
     cidr_auto: bool = False
+    # True si network.capture_interface venía en el YAML (no resuelta por defecto).
+    capture_explicit: bool = False
     warnings: list[str] = field(default_factory=list)
 
     @property
@@ -347,6 +352,7 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
 
     network = NetworkCfg(
         interface=interface,
+        capture_interface=interface,
         cidr=cidr,
         gateway_ip=gateway_ip,
         dhcp_server_ip=net_raw.get("dhcp_server_ip"),
@@ -356,6 +362,27 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
         network.gateway_ip = None
     if network.dhcp_server_ip in ("", "null", "None"):
         network.dhcp_server_ip = None
+
+    # --------------------------------------------------- interfaz de captura
+    # null/auto = la misma que la de gestión. Una explícita se valida: existe
+    # y no es loopback. Que no tenga IPv4 es lo normal en un puerto espejo, así
+    # que solo se avisa en `doctor`, no aquí.
+    pedida = str(net_raw.get("capture_interface") or "").strip()
+    capture_explicit = False
+    if pedida.lower() in ("", "null", "none", "auto"):
+        pedida = ""          # igual que el gateway: null entre comillas también vale
+    if pedida:
+        cap_info = ifaces.find(pedida)
+        if cap_info is None:
+            errors.append(
+                f"network.capture_interface inexistente en este sistema: {pedida}")
+        elif cap_info.loopback:
+            errors.append(
+                f"network.capture_interface no puede ser loopback: {pedida}")
+        else:
+            network.capture_interface = pedida
+            capture_explicit = True
+
     sensor = SensorCfg(
         mode=mode,
         sweep_interval=int(_get(sen_raw, "sweep_interval", 30)),
@@ -511,7 +538,8 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
 
     cfg = Config(root=base, network=network, sensor=sensor, scan=scan,
                  detect=detect, notify=notify, dashboard=dashboard, paths=paths,
-                 interface_auto=interface_auto, cidr_auto=cidr_auto, warnings=warnings)
+                 interface_auto=interface_auto, cidr_auto=cidr_auto,
+                 capture_explicit=capture_explicit, warnings=warnings)
     cfg.ensure_dirs()
     return cfg
 

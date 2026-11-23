@@ -28,6 +28,9 @@ class Observation:
     port_dst: int | None = None
     op: str | None = None          # arp: request|reply   dhcp: offer|ack
     extra: dict[str, Any] = field(default_factory=dict)
+    # "in" | "out" | None. Relativo al sensor y solo cuando la trama lo toca:
+    # en un puerto espejo casi todo es tráfico de terceros y queda en None.
+    direction: str | None = None
 
     @property
     def gratuitous(self) -> bool:

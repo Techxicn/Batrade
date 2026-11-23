@@ -167,6 +167,8 @@ Selection order:
 
 Pin `gateway_ip` for the same reason. With `null` the sensor adopts the default route at every start; that is right for a laptop that moves between networks, but a fixed gateway is what turns *the gateway changed its MAC* into an immediate `crit` instead of a quiet re-learning. `gateway_ip` from the config (or from the stored baseline) wins over the route.
 
+**Mirror port (SPAN): `capture_interface`.** Leave it `null` when the sensor captures on the interface it is managed through. On a switch port mirror, set `network.capture_interface` to the monitoring NIC: the sniffer opens it in promiscuous mode so it keeps every replicated frame, not only the ones addressed to the sensor. That NIC usually has no IPv4 and that is fine — `doctor` says so and the sweep, the gateway learning and the ARP verification keep using `network.interface`. If the capture NIC *does* have an address, discovery probes from it; if it does not, discovery falls back to the management interface, because `arp-scan` cannot transmit from a port without an address.
+
 List the interfaces with their kind, address, MAC and whether they carry the default route:
 
 ```bash

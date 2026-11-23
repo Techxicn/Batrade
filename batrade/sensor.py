@@ -685,7 +685,8 @@ class Sensor:
         from batrade.detect.sniffer import sniff_observations
 
         conn = self._conn()
-        log.info("sniffer pasivo iniciado en %s", self.cfg.network.interface)
+        captura = self.cfg.network.capture_interface
+        log.info("sniffer pasivo iniciado en %s (captura)", captura)
 
         def handle(obs: Observation) -> None:
             if self.stop_event.is_set():
@@ -701,7 +702,8 @@ class Sensor:
                                                  source="sniff"))
             self._persist(c, findings, obs.ts)
 
-        sniff_observations(self.cfg.network.interface, handle, self.stop_event)
+        sniff_observations(captura, handle, self.stop_event,
+                           sensor_mac=self.sensor_mac)
         del conn
 
     # ------------------------------------------------------------- escaneos

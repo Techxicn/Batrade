@@ -309,6 +309,24 @@ def cmd_doctor(cfg: Config, _args) -> int:
     detalle = f"{info.address()}, {info.kind}" if info else "sin IPv4"
     print(f"  interfaz        : {cfg.network.interface or '(ninguna)'} "
           f"({origen}; {detalle})")
+    cap_name = cfg.network.capture_interface
+    misma = not cap_name or cap_name == cfg.network.interface
+    cap_info = ifaces.find(cap_name) if cap_name else None
+    if misma:
+        cap_detalle = "misma que la de gestión"
+    elif cap_info is None:
+        cap_detalle = "sin datos"
+    elif not cap_info.ip:
+        cap_detalle = "sin IPv4 (normal en puerto espejo)"
+    else:
+        cap_detalle = f"{cap_info.address()}, {cap_info.kind}"
+    print(f"  captura         : {cap_name or '(ninguna)'} ({cap_detalle})")
+    if misma and cfg.capture_explicit:
+        print("  aviso           : network.capture_interface es igual a network.interface; "
+              "en un puerto espejo conviene separarlas")
+    elif not misma and cap_info is not None and not cap_info.ip:
+        print(f"  aviso           : {cap_name} no tiene IPv4 (normal en espejo); "
+              f"el barrido y la verificación usan {cfg.network.interface}")
     print(f"  subred          : {cfg.network.cidr}"
           f"{'  (derivada)' if cfg.cidr_auto else ''}")
     print(f"  gateway         : {cfg.network.gateway_ip or default_gateway() or 'desconocido'}")

@@ -22,8 +22,13 @@ DEFAULT_FILTER = "arp or udp port 67 or udp port 68 or (tcp and tcp[tcpflags] & 
 
 def sniff_observations(iface: str, on_observation: Callable[[Observation], None],
                        stop_event: threading.Event,
-                       bpf: str = DEFAULT_FILTER) -> None:
-    """Bucle de captura que respeta ``stop_event`` y no acumula paquetes."""
+                       bpf: str = DEFAULT_FILTER,
+                       sensor_mac: str | None = None) -> None:
+    """Bucle de captura que respeta ``stop_event`` y no acumula paquetes.
+
+    ``sensor_mac`` sólo etiqueta la dirección de las observaciones (in/out); sin
+    él quedan en ``None``, que es lo correcto para un puerto espejo.
+    """
     try:
         from scapy.all import sniff
     except Exception as exc:  # noqa: BLE001
@@ -36,7 +41,8 @@ def sniff_observations(iface: str, on_observation: Callable[[Observation], None]
         nonlocal packets
         packets += 1
         try:
-            obs = observation_from_packet(pkt, int(time.time() * 1000))
+            obs = observation_from_packet(pkt, int(time.time() * 1000),
+                                          iface=iface, sensor_mac=sensor_mac)
         except Exception:  # noqa: BLE001
             log.exception("no se pudo convertir un paquete")
             return
@@ -49,7 +55,13 @@ def sniff_observations(iface: str, on_observation: Callable[[Observation], None]
     while not stop_event.is_set():
         try:
             # store=False es obligatorio: acumular paquetes rompe el KPI de memoria.
-            sniff(iface=iface, filter=bpf, prn=handle, store=False, timeout=2)
+            # promisc=True es obligatorio en un puerto espejo (SPAN): el tráfico
+            # replicado conserva su MAC destino original (la del gateway, la del
+            # host que habla, difusión...), y sin modo promiscuo la tarjeta
+            # descarta en hardware toda trama cuya MAC destino no sea la suya.
+            # El filtro BPF se aplica después, así que no se procesa de más.
+            sniff(iface=iface, filter=bpf, prn=handle, store=False, timeout=2,
+                  promisc=True)
         except PermissionError:
             log.error("sin CAP_NET_RAW: sniffer deshabilitado")
             return

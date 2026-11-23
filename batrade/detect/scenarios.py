@@ -196,18 +196,47 @@ def write_pcap(scenario: str, path: str, cfg: Config, base_ts: int = BASE_TS) ->
     return path
 
 
-def observation_from_packet(pkt, ts: int) -> Observation | None:
-    """Traduce un paquete scapy a observación normalizada. None si no interesa."""
+def _direction(pkt, sensor_mac: str | None) -> str | None:
+    """``in``/``out`` respecto al sensor, o ``None`` si la trama no es suya.
+
+    Sólo se puede afirmar cuando la MAC del sensor aparece en la trama. En un
+    puerto espejo la mayor parte del tráfico es de terceros, y el switch no nos
+    dice por qué puerto entró: ahí se deja ``None`` en vez de inventar un valor.
+    """
+    if not sensor_mac:
+        return None
+    from scapy.all import Ether
+    if not pkt.haslayer(Ether):
+        return None
+    propio = normalize_mac(sensor_mac)
+    if normalize_mac(pkt[Ether].dst) == propio:
+        return "in"
+    if normalize_mac(pkt[Ether].src) == propio:
+        return "out"
+    return None
+
+
+def observation_from_packet(pkt, ts: int, iface: str | None = None,
+                            sensor_mac: str | None = None) -> Observation | None:
+    """Traduce un paquete scapy a observación normalizada. None si no interesa.
+
+    ``iface`` es la interfaz por la que se capturó (el puerto espejo); en replay
+    de pcap no hay una sola interfaz viva y se deja en ``None``. ``sensor_mac``
+    sólo sirve para etiquetar la dirección; sin él, ``direction`` queda en None.
+    """
     from scapy.all import ARP as ScapyARP
     from scapy.all import BOOTP, DHCP as ScapyDHCP, IP, TCP
 
+    direction = _direction(pkt, sensor_mac)
     if pkt.haslayer(ScapyARP):
         arp = pkt[ScapyARP]
         return Observation(
-            kind=ARP, ts=ts, ip_src=str(arp.psrc), mac_src=normalize_mac(arp.hwsrc),
+            kind=ARP, ts=ts, iface=iface, ip_src=str(arp.psrc),
+            mac_src=normalize_mac(arp.hwsrc),
             ip_dst=str(arp.pdst), mac_dst=normalize_mac(arp.hwdst),
             op="reply" if int(arp.op) == 2 else "request",
             extra={"gratuitous": str(arp.psrc) == str(arp.pdst)},
+            direction=direction,
         )
     if pkt.haslayer(BOOTP) and pkt.haslayer(ScapyDHCP):
         try:
@@ -216,17 +245,21 @@ def observation_from_packet(pkt, ts: int) -> Observation | None:
             mtype = 0
         if mtype in (2, 5):  # OFFER / ACK
             return Observation(
-                kind=DHCP, ts=ts, ip_src=pkt[IP].src, mac_src=normalize_mac(pkt.src),
+                kind=DHCP, ts=ts, iface=iface, ip_src=pkt[IP].src,
+                mac_src=normalize_mac(pkt.src),
                 op="offer" if mtype == 2 else "ack",
                 extra={"yiaddr": str(pkt[BOOTP].yiaddr), "msg_type": mtype},
+                direction=direction,
             )
         return None
     if pkt.haslayer(TCP) and pkt.haslayer(IP):
         tcp = pkt[TCP]
         return Observation(
-            kind=SYN, ts=ts, ip_src=pkt[IP].src, mac_src=normalize_mac(pkt.src),
+            kind=SYN, ts=ts, iface=iface, ip_src=pkt[IP].src,
+            mac_src=normalize_mac(pkt.src),
             ip_dst=pkt[IP].dst, port_dst=int(tcp.dport),
             extra={"flags": str(tcp.flags)},
+            direction=direction,
         )
     return None
 

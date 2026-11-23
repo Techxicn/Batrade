@@ -7,6 +7,10 @@ network:
   # una red concreta, pon el nombre real de la interfaz; `python3 -m batrade
   # interfaces` las lista con su IP, MAC y tipo.
   interface: auto
+  # Interfaz de captura (puerto espejo). null = usar network.interface.
+  # Puede no tener IPv4: es lo normal en un SPAN. El descubrimiento, el gateway
+  # y la verificación ARP siguen usando network.interface.
+  capture_interface: null
   # auto = deriva la subred (CIDR normalizado) de la IP y la máscara.
   cidr: auto
   # Vacío/null = puerta de enlace por defecto de la tabla de rutas, sólo si

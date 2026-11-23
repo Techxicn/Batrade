@@ -38,6 +38,26 @@ class Discovery:
     def __init__(self, cfg: Config, capabilities: caps_mod.Capabilities | None = None):
         self.cfg = cfg
         self.caps = capabilities or caps_mod.probe()
+        self.iface = self._iface_de_barrido()
+
+    def _iface_de_barrido(self) -> str:
+        """Interfaz por la que se sondea: la de captura si puede transmitir.
+
+        Un puerto espejo no tiene IPv4 y arp-scan no puede enviar por él; usarlo
+        dejaría el barrido vacío y marcaría todos los equipos como fuera de
+        línea. Cuando la interfaz de captura sí tiene dirección se usa esa.
+        """
+        captura = self.cfg.network.capture_interface
+        gestion = self.cfg.network.interface
+        if not captura or captura == gestion:
+            return gestion
+        from batrade.net import ifaces
+        info = ifaces.find(captura)
+        if info is not None and info.ip:
+            return captura
+        log.info("interfaz de captura %s sin IPv4: el barrido usa %s",
+                 captura, gestion)
+        return gestion
 
     @property
     def backend(self) -> str:
@@ -73,7 +93,7 @@ class Discovery:
     def _arp_scan(self) -> dict[str, str]:
         argv = [
             "arp-scan",
-            "--interface", self.cfg.network.interface,
+            "--interface", self.iface,
             "--plain", "--ignoredups", "--retry", "2",
             self.cfg.network.cidr,
         ]
@@ -111,7 +131,7 @@ class Discovery:
             probe_cidr(self.cfg.network.cidr, timeout=0.35)
         except OSError as exc:
             raise DiscoveryError(str(exc)) from exc
-        table = read_neighbors(self.cfg.network.interface)
+        table = read_neighbors(self.iface)
         self_ip = self._own_ip()
         hosts: dict[str, str] = {}
         for ip, mac in table.items():
@@ -123,4 +143,4 @@ class Discovery:
 
     def _own_ip(self) -> str | None:
         from batrade.net.iputil import interface_ipv4
-        return interface_ipv4(self.cfg.network.interface)
+        return interface_ipv4(self.iface)
