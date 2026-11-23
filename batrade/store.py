@@ -646,6 +646,14 @@ def recent_failed_scans(conn: sqlite3.Connection, limit: int = 5) -> list[sqlite
     ))
 
 
+def scan_xml_paths(conn: sqlite3.Connection) -> set[str]:
+    """Rutas XML que alguna fila de ``scans`` referencia (no son huérfanas)."""
+    filas = conn.execute(
+        "SELECT ruta_xml FROM scans WHERE ruta_xml IS NOT NULL"
+    )
+    return {str(fila["ruta_xml"]) for fila in filas if fila["ruta_xml"]}
+
+
 def purge(conn: sqlite3.Connection, before_ts: int) -> dict[str, Any]:
     """Retención: elimina datos y artefactos anteriores a ``before_ts`` (RNF-06).
 

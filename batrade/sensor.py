@@ -88,6 +88,40 @@ def purge_rotated_logs(alerts_path: str | Path, cutoff_ts: int) -> int:
     return borradas
 
 
+ORPHAN_XML_MS = 24 * 3600_000
+
+
+def purge_orphan_xml(conn, scans_dir: str | Path, ts: int, *,
+                     max_age_ms: int = ORPHAN_XML_MS) -> int:
+    """Borra los XML de escaneos que ninguna fila de ``scans`` referencia.
+
+    Un intento que muere deja el archivo huérfano; si el fallo se registró bien
+    ya se borró al momento, pero una interrupción (corte de luz, SIGKILL) puede
+    dejarlo. Sólo se tocan archivos con más de ``max_age_ms`` de antigüedad,
+    nunca symlinks y siempre dentro de ``scans_dir``.
+    """
+    base = Path(scans_dir)
+    referenciados = store.scan_xml_paths(conn)
+    borrados = 0
+    try:
+        candidatos = list(base.glob("*.xml"))
+    except OSError:
+        return 0
+    for ruta in candidatos:
+        try:
+            if ruta.is_symlink() or not ruta.is_file():
+                continue
+            if str(ruta) in referenciados or str(ruta.resolve()) in referenciados:
+                continue
+            if ts - int(ruta.stat().st_mtime * 1000) < max_age_ms:
+                continue
+        except OSError:
+            continue
+        if safe_unlink_scan(base, ruta):
+            borrados += 1
+    return borrados
+
+
 def safe_unlink_scan(scans_dir: str | Path, candidate: str | Path) -> bool:
     """Elimina un XML de escaneo sólo si está realmente dentro de ``scans_dir``.
 
@@ -487,6 +521,9 @@ class Sensor:
             1 for ruta in rutas if safe_unlink_scan(self.cfg.paths.scans_dir, ruta)
         )
         purged["alerts_rotados"] = purge_rotated_logs(self.cfg.paths.alerts_log, cutoff)
+        # Barrido horario de XML huérfanos (el intento fallido ya se borra al
+        # fallar; esto cubre interrupciones que no llegan a registrarlo).
+        purged["xml_huerfanos"] = purge_orphan_xml(conn, self.cfg.paths.scans_dir, ts)
         return purged
 
     def _heartbeat(self, conn, ts: int) -> None:
