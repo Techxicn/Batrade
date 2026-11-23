@@ -171,6 +171,25 @@ def _heartbeat_label(hb, stale_after_s: int = 45) -> str:
     return f"{_human_ms(ts)}  (hace {edad} s){aviso}"
 
 
+def _capture_label(hb) -> str | None:
+    """Estado de captura del último latido en una línea (D-01)."""
+    if hb is None or not hb["detalle"]:
+        return None
+    try:
+        captura = json.loads(hb["detalle"]).get("captura")
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(captura, dict):
+        return None
+    contadores = captura.get("contadores") or {}
+    ultima = captura.get("ultima_obs_ts")
+    hace = ("sin observaciones" if ultima is None
+            else f"última obs. hace {captura.get('idle_s')} s")
+    tipos = " ".join(f"{k}={contadores.get(k, 0)}"
+                     for k in ("arp", "syn", "dhcp", "neigh"))
+    return f"{captura.get('estado', '?')}  ·  {hace}  ·  {tipos}"
+
+
 def whoami() -> str:
     """Usuario efectivo del proceso, con su uid."""
     uid = os.geteuid()
@@ -279,6 +298,9 @@ def cmd_doctor(cfg: Config, _args) -> int:
     print(f"  dispositivos    : {rows.get('total', 0)} "
           f"(en línea {rows.get('online', 0)}, desconocidos {rows.get('desconocidos', 0)})")
     print(f"  heartbeat       : {_heartbeat_label(hb, cfg.sensor.heartbeat_interval * 3)}")
+    captura = _capture_label(hb)
+    if captura:
+        print(f"  captura         : {captura}")
     pista = mode_hint(caps, mode)
     if pista:
         print(f"  pista           : {pista}")
@@ -389,6 +411,7 @@ def cmd_status(cfg: Config, _args) -> int:
         print(f"  {info.name:<10} {info.state()}")
         print(f"  {'':<10} log: {info.logfile}")
     age: int | None = None
+    hb = None
     try:
         conn = db.connect(cfg.paths.db, readonly=True)
         try:
@@ -400,6 +423,9 @@ def cmd_status(cfg: Config, _args) -> int:
     except Exception:  # base inexistente o aún sin latido
         age = None
     print(f"  {'latido':<10} {'sin datos' if age is None else f'hace {age} s'}")
+    captura = _capture_label(hb)
+    if captura:
+        print(f"  {'captura':<10} {captura}")
     print(f"  {'usuario':<10} {whoami()}")
     print(f"  {'modo':<10} {mode}")
     for note in notes:

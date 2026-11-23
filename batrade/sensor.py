@@ -25,7 +25,7 @@ from batrade import db, store
 from batrade.config import Config
 from batrade.detect import scenarios
 from batrade.detect.engine import Engine
-from batrade.detect.observation import ARP, Observation
+from batrade.detect.observation import ARP, NEIGH, Observation
 from batrade.detect.state import Baseline
 from batrade.inventory import Inventory, status as baseline_status
 from batrade.net import caps as caps_mod
@@ -42,6 +42,16 @@ from batrade.net.verify import (ESTADO_CONFIRMADO, ESTADO_DESCARTADO,
 from batrade.notify import Notifier
 
 log = logging.getLogger("batrade.sensor")
+
+# Hilos cuya muerte deja al sensor ciego o mudo: se registran como `crit` y se
+# reintentan con espera creciente. El resto sólo se registra.
+HILOS_CRITICOS = frozenset({"batrade-sniff", "batrade-sweep", "batrade-neigh",
+                            "batrade-notify"})
+# Reintentos por hilo y ventana móvil: más de esto en una hora es un bucle roto.
+MAX_REINICIOS_HORA = 5
+REINICIO_BASE_MS = 5_000
+REINICIO_MAX_MS = 300_000
+VENTANA_REINICIOS_MS = 3_600_000
 
 # Sondas ARP simultáneas. Un ataque sostenido puede generar muchos eventos con
 # `needs_verify`; el pool evita la rotación sin límite de hilos efímeros.
@@ -106,6 +116,9 @@ class Sensor:
             maxsize=VERIFY_QUEUE_MAX)
         self._verify_started = False
         self._threads: list[threading.Thread] = []
+        self._supervisados: dict[str, dict] = {}
+        self._ultima_obs_ts: int | None = None
+        self._contadores = {"arp": 0, "syn": 0, "dhcp": 0, "neigh": 0}
         self.started_ts = now_ms()
         self.oui = OuiDB.load(cfg.paths.oui_file)
         self.conn = db.initialize(cfg.paths.db)
@@ -174,10 +187,7 @@ class Sensor:
         if self.mode in ("live", "degraded"):
             self._spawn(self._sweep_loop, "batrade-sweep")
             if self.cfg.sensor.neighbor_watch and self.caps.netlink_neigh:
-                watcher = NeighborWatcher(self._on_neighbor, self.cfg.network.interface,
-                                          stop_event=self.stop_event)
-                self._threads.append(watcher)
-                watcher.start()
+                self._spawn(self._neigh_loop, "batrade-neigh")
             if self.mode == "live":
                 self._spawn(self._sniff_loop, "batrade-sniff")
             for i in range(self.cfg.scan.max_concurrent if self.cfg.scan.enabled else 0):
@@ -219,17 +229,172 @@ class Sensor:
 
     # -------------------------------------------------------------- hilos
     def _spawn(self, target, name: str) -> None:
-        t = threading.Thread(target=self._guard(target), name=name, daemon=True)
-        self._threads.append(t)
-        t.start()
+        self._supervisados[name] = {
+            "objetivo": target,
+            "critico": name in HILOS_CRITICOS,
+            "reinicios": [],
+            "detenido": False,
+            "hilo": None,
+        }
+        hilo = threading.Thread(target=self._guard(name), name=name, daemon=True)
+        self._supervisados[name]["hilo"] = hilo
+        self._threads.append(hilo)
+        hilo.start()
 
-    def _guard(self, target):
+    def _guard(self, nombre: str):
+        """Envuelve un hilo: registra la muerte, cierra su conexión y lo reintenta."""
+
         def runner():
             try:
-                target()
-            except Exception:
-                log.exception("hilo %s terminó por excepción", threading.current_thread().name)
+                self._supervisados[nombre]["objetivo"]()
+            except Exception as exc:
+                log.exception("hilo %s terminó por excepción", nombre)
+                try:
+                    self._on_thread_death(nombre, exc, now_ms())
+                except Exception:  # noqa: BLE001 - el guardián nunca puede caerse
+                    log.exception("no se pudo registrar la muerte del hilo %s", nombre)
+            finally:
+                self._close_thread_conn()
+
         return runner
+
+    def _close_thread_conn(self) -> None:
+        """Cierra la conexión SQLite propia del hilo (la del thread-local)."""
+        conn = getattr(self._local, "conn", None)
+        if conn is None:
+            return
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            pass
+        self._local.conn = None
+
+    def _on_thread_death(self, nombre: str, exc: BaseException, ts: int) -> int | None:
+        """Registra el evento y programa el reintento. Devuelve la espera o None."""
+        entrada = self._supervisados.get(nombre)
+        if entrada is None:
+            # Hilo no registrado por `_spawn`: el libro de reintentos se lleva
+            # igualmente, sin objetivo que relanzar.
+            entrada = {"objetivo": None, "critico": nombre in HILOS_CRITICOS,
+                       "reinicios": [], "detenido": False, "hilo": None}
+            self._supervisados[nombre] = entrada
+        critico = bool(entrada["critico"])
+        reinicios = [t for t in entrada["reinicios"] if ts - t < VENTANA_REINICIOS_MS]
+        entrada["reinicios"] = reinicios
+
+        detenido = critico and len(reinicios) >= MAX_REINICIOS_HORA
+        entrada["detenido"] = detenido
+
+        self._emit_thread_event(nombre, exc, ts, critico=critico,
+                                detenido=detenido, reinicios=len(reinicios))
+        if not critico or detenido:
+            return None
+        espera = min(REINICIO_BASE_MS * (2 ** len(reinicios)), REINICIO_MAX_MS)
+        reinicios.append(ts)
+        self._schedule_restart(nombre, espera)
+        return espera
+
+    def _emit_thread_event(self, nombre: str, exc: BaseException, ts: int, *,
+                           critico: bool, detenido: bool, reinicios: int) -> None:
+        from batrade.detect.observation import Finding
+
+        if detenido:
+            resumen = f"El hilo {nombre} quedó detenido tras {reinicios} reinicios"
+            accion = "Reinicia el sensor: ese hilo ya no se recupera solo."
+            clave = f"thread:stopped:{nombre}"
+        else:
+            resumen = f"El hilo {nombre} murió por {type(exc).__name__}"
+            accion = ("Se reintenta solo con espera creciente." if critico
+                      else "Revisa el log del sensor.")
+            clave = f"thread:died:{nombre}"
+        finding = Finding(
+            tipo="thread_died", severidad="crit" if (critico or detenido) else "warn",
+            clave=clave,
+            detalle={
+                "resumen": resumen,
+                "por_que": "Sin ese hilo el sensor pierde parte de su vigilancia.",
+                "accion": accion,
+                # Sólo nombre y tipo de excepción: nunca el mensaje ni el contexto.
+                "hilo": nombre, "excepcion": type(exc).__name__, "reinicios": reinicios,
+            },
+        )
+        self._persist(self._conn(), [finding], ts)
+
+    def _schedule_restart(self, nombre: str, espera_ms: int) -> None:
+        temporizador = threading.Timer(espera_ms / 1000.0, self._restart_thread,
+                                       args=(nombre,))
+        temporizador.daemon = True
+        temporizador.start()
+
+    def _restart_thread(self, nombre: str) -> None:
+        if self.stop_event.is_set():
+            return
+        entrada = self._supervisados.get(nombre)
+        if entrada is None or entrada["detenido"] or not callable(entrada.get("objetivo")):
+            return
+        hilo = threading.Thread(target=self._guard(nombre), name=nombre, daemon=True)
+        entrada["hilo"] = hilo
+        self._threads.append(hilo)
+        hilo.start()
+
+    def _neigh_loop(self) -> None:
+        """Arranca la vigilancia de vecinos; si muere, el guardián la reintenta."""
+        NeighborWatcher(self._on_neighbor, self.cfg.network.interface,
+                        stop_event=self.stop_event).run()
+
+    def _thread_alive(self, nombre: str) -> bool:
+        entrada = self._supervisados.get(nombre)
+        if not entrada or entrada.get("detenido"):
+            return False
+        hilo = entrada.get("hilo")
+        return bool(hilo is not None and hilo.is_alive())
+
+    # ------------------------------------------------- observabilidad de captura
+    def _note_observation(self, kind: str, ts: int) -> None:
+        """Contabiliza una observación para el latido (contadores acotados)."""
+        clave = str(kind).lower()
+        if clave not in self._contadores:
+            return
+        self._contadores[clave] = min(self._contadores[clave] + 1, 2 ** 31 - 1)
+        self._ultima_obs_ts = int(ts)
+
+    def _capture_state(self, ts: int) -> dict:
+        ultima = self._ultima_obs_ts
+        if self.mode != "live":
+            estado = "no_aplica"
+        else:
+            estado = "viva" if self._thread_alive("batrade-sniff") else "detenida"
+        return {
+            "estado": estado,
+            "ultima_obs_ts": ultima,
+            "idle_s": None if ultima is None else max(0, (ts - ultima) // 1000),
+            "contadores": dict(self._contadores),
+        }
+
+    def _check_capture_idle(self, conn, ts: int) -> bool:
+        """Avisa (info, sin notificar) si en modo live no entra nada de tráfico."""
+        if self.mode != "live":
+            return False
+        limite = self.cfg.sensor.capture_idle_warn_s * 1000
+        ultima = self._ultima_obs_ts
+        if ultima is None or ts - ultima < limite:
+            return False
+        from batrade.detect.observation import Finding
+
+        minutos = max(1, (ts - ultima) // 60_000)
+        finding = Finding(
+            tipo="capture_idle", severidad="info", notificar=False,
+            clave="capture:idle",
+            detalle={
+                "resumen": f"Sin observaciones de captura desde hace {minutos} min",
+                "por_que": ("El sniffer sigue vivo pero no ve tráfico: interfaz "
+                            "equivocada, permisos o la red está en silencio."),
+                "accion": "Revisa /health y que el proceso tenga CAP_NET_RAW.",
+                "idle_s": (ts - ultima) // 1000,
+            },
+        )
+        self._persist(conn, [finding], ts)
+        return True
 
     def _main_loop(self) -> None:
         import sqlite3
@@ -255,6 +420,7 @@ class Sensor:
                         log.info("purga de retención", extra={"fields": purged})
                 if ts - self._last_heartbeat() >= self.cfg.sensor.heartbeat_interval * 1000:
                     self._heartbeat(conn, ts)
+                    self._check_capture_idle(conn, ts)
                 if self.duration and (ts - self.started_ts) > self.duration * 1000:
                     log.info("duración alcanzada; deteniendo")
                     self.stop_event.set()
@@ -286,6 +452,7 @@ class Sensor:
             "queue": self.scan_queue.qsize(),
             "notified": self.notifier.sent,
             "notify_failed": self.notifier.failed,
+            "captura": self._capture_state(ts),
         }
         store.heartbeat(conn, "sensor", ts, json.dumps(detalle, default=str))
 
@@ -406,6 +573,7 @@ class Sensor:
             return
         conn = self._conn()
         ts = obs.ts
+        self._note_observation(NEIGH, ts)
         with self._lock:
             findings = self.engine.observe(obs)
         inv = Inventory(conn, self.cfg, self.oui, learning=baseline_status(conn)["learning"])
@@ -423,6 +591,7 @@ class Sensor:
         def handle(obs: Observation) -> None:
             if self.stop_event.is_set():
                 return
+            self._note_observation(obs.kind, obs.ts)
             c = self._conn()
             with self._lock:
                 findings = self.engine.observe(obs)
@@ -597,6 +766,7 @@ class Sensor:
                 if self.stop_event.wait(min(gap, 1.0)):
                     return
             feed = replace(obs, ts=now_ms())
+            self._note_observation(obs.kind, feed.ts)
             with self._lock:
                 findings = self.engine.observe(feed)
             if obs.kind == ARP and obs.ip_src and obs.mac_src and obs.ip_src != self.sensor_ip:

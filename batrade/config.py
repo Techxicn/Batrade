@@ -47,6 +47,8 @@ class SensorCfg:
     heartbeat_interval: int = 15
     retention_days: int = 90
     neighbor_watch: bool = True
+    # Segundos sin ninguna observación en modo live antes de avisar en /health.
+    capture_idle_warn_s: int = 600
 
 
 @dataclass(frozen=True, slots=True)
@@ -354,6 +356,7 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
         heartbeat_interval=int(_get(sen_raw, "heartbeat_interval", 15)),
         retention_days=int(_get(sen_raw, "retention_days", 90)),
         neighbor_watch=bool(_get(sen_raw, "neighbor_watch", True)),
+        capture_idle_warn_s=int(_get(sen_raw, "capture_idle_warn_s", 600)),
     )
     detect = DetectCfg(
         window_s=int(_get(det_raw, "window_s", 10)),
@@ -440,6 +443,10 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
         errors.append("sensor.presence_misses debe ser >= 1")
     if sensor.heartbeat_interval < 5:
         errors.append("sensor.heartbeat_interval debe ser >= 5")
+    if sensor.capture_idle_warn_s < 60:
+        errors.append(
+            f"sensor.capture_idle_warn_s debe ser >= 60: {sensor.capture_idle_warn_s}"
+        )
     if sensor.retention_days < 1:
         errors.append("sensor.retention_days debe ser >= 1")
     if not 2 <= detect.window_s <= 600:

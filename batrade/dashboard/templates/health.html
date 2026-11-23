@@ -32,6 +32,23 @@
 </div>
 {% endif %}
 
+{% set captura = (health.detail or {}).get("captura") %}
+{% if captura and captura["estado"] == "detenida" %}
+<div class="banner warn">
+  <strong>Captura detenida.</strong> El hilo del sniffer no está vivo; el sensor sólo
+  ve lo que aportan el barrido y la tabla de vecinos. El guardián lo reintenta solo;
+  si el evento <span class="mono">thread_died</span> se repite, reinicia el sensor.
+</div>
+{% elif captura and captura["idle_s"] is not none
+        and captura["idle_s"] > cfg.sensor.capture_idle_warn_s %}
+<div class="banner warn">
+  <strong>Sin tráfico capturado desde hace {{ captura["idle_s"] // 60 }} min.</strong>
+  El sniffer está vivo pero no ve observaciones: revisa la interfaz
+  (<span class="mono">{{ cfg.network.interface or "auto" }}</span>), que el proceso tenga
+  <span class="mono">CAP_NET_RAW</span> y que la red no esté en silencio.
+</div>
+{% endif %}
+
 <div class="columns">
   <section class="card grow">
     <header class="card-head"><h2>Capacidades detectadas</h2></header>
@@ -81,6 +98,18 @@
       <dt>Base de datos</dt><dd>{{ (db_size / 1024)|round(1) }} KiB</dd>
       <dt>Retención</dt><dd>{{ cfg.sensor.retention_days }} días</dd>
       <dt>Escaneos simultáneos</dt><dd>{{ cfg.scan.max_concurrent }}</dd>
+      {% set captura = (health.detail or {}).get("captura") %}
+      {% if captura %}
+      <dt>Captura</dt>
+      <dd>{{ captura["estado"] }}
+        {%- if captura["ultima_obs_ts"] %} · última obs. hace
+          {{ captura["idle_s"] }} s{% else %} · sin observaciones{% endif %}</dd>
+      <dt>Observaciones</dt>
+      <dd class="mono small">arp {{ captura["contadores"]["arp"] }} ·
+        syn {{ captura["contadores"]["syn"] }} ·
+        dhcp {{ captura["contadores"]["dhcp"] }} ·
+        neigh {{ captura["contadores"]["neigh"] }}</dd>
+      {% endif %}
     </dl>
     {% if health.detail %}
     <details><summary>Último heartbeat</summary>

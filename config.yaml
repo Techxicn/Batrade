@@ -25,6 +25,9 @@ sensor:
   presence_misses: 3
   heartbeat_interval: 15
   retention_days: 90
+  # Segundos sin ninguna observación en modo live antes de avisar (>= 60).
+  # El aviso es un evento informativo y un banner en /health, no una alerta.
+  capture_idle_warn_s: 600
   # Vigilancia de la tabla de vecinos vía netlink (no requiere CAP_NET_RAW).
   neighbor_watch: true
 
