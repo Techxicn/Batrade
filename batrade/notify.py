@@ -147,22 +147,49 @@ def send_discord(channel: dict[str, Any], payload_text: str, timeout: float,
 
 
 class LocalSink:
-    """Escribe a archivo con permisos 600. Nunca falla por red."""
+    """Escribe a archivo con permisos 600 y rotación por tamaño.
 
-    def __init__(self, path: Path):
-        self.path = path
+    Sin rotación, `var/alerts.log` crecía hasta llenar el disco y un `OSError`
+    al escribir se llevaba por delante al notificador.
+    """
+
+    def __init__(self, path: Path, max_mb: int = 10, backups: int = 3):
+        self.path = Path(path)
+        self.max_bytes = max(1, int(max_mb)) * 1024 * 1024
+        self.backups = max(0, int(backups))
 
     def write(self, text: str) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        new = not self.path.exists()
-        with self.path.open("a", encoding="utf-8") as fh:
-            fh.write(f"----- {datetime.now().isoformat(timespec='seconds')} -----\n")
-            fh.write(redactar(text) + "\n")
-        if new:
-            try:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._rotar_si_toca()
+            nuevo = not self.path.exists()
+            with self.path.open("a", encoding="utf-8") as fh:
+                fh.write(f"----- {datetime.now().isoformat(timespec='seconds')} -----\n")
+                fh.write(redactar(text) + "\n")
+            if nuevo:
                 self.path.chmod(0o600)
-            except OSError:
-                pass
+        except OSError as exc:
+            # Un disco lleno no puede tumbar la cola de notificaciones.
+            log.warning("no se pudo escribir %s: %s", self.path.name, exc)
+
+    def _rotar_si_toca(self) -> None:
+        if not self.path.exists() or self.path.stat().st_size < self.max_bytes:
+            return
+        if self.backups <= 0:
+            self.path.unlink(missing_ok=True)
+            return
+        for i in range(self.backups - 1, 0, -1):
+            origen = self.path.with_name(f"{self.path.name}.{i}")
+            if origen.exists():
+                origen.replace(self.path.with_name(f"{self.path.name}.{i + 1}"))
+        self.path.replace(self.path.with_name(f"{self.path.name}.1"))
+        for i in range(1, self.backups + 1):
+            copia = self.path.with_name(f"{self.path.name}.{i}")
+            if copia.exists():
+                try:
+                    copia.chmod(0o600)
+                except OSError:
+                    pass
 
 
 def backoff_seconds(attempts: int) -> int:
@@ -181,7 +208,8 @@ class Notifier:
         self.conn_factory = conn_factory
         self.env = env or {}
         self.sender = sender
-        self.sink = LocalSink(cfg.paths.alerts_log)
+        self.sink = LocalSink(cfg.paths.alerts_log, cfg.notify.local_max_mb,
+                              cfg.notify.local_backups)
         self.stop_event = threading.Event()
         self.sent = 0
         self.failed = 0

@@ -593,6 +593,15 @@ def cmd_reset_db(cfg: Config, args) -> int:
             except OSError as exc:
                 print(f"  aviso: no se pudo vaciar {cfg.paths.alerts_log.name}: {exc}",
                       file=sys.stderr)
+        # Las copias rotadas del log de alertas también son artefactos de prueba.
+        for copia in sorted(cfg.paths.alerts_log.parent.glob(
+                cfg.paths.alerts_log.name + ".*")):
+            try:
+                if copia.is_symlink() or not copia.is_file():
+                    continue
+                copia.unlink()
+            except OSError:
+                continue
 
     print("Base reiniciada.")
     check = db.connect(cfg.paths.db, readonly=True)

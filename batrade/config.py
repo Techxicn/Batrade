@@ -93,6 +93,10 @@ class NotifyCfg:
     channels: list[dict[str, Any]] = field(default_factory=lambda: [{"type": "local"}])
     timeout_s: float = 8.0
     max_attempts: int = 8
+    # Rotación de var/alerts.log: tamaño máximo por archivo y copias que se
+    # conservan (alerts.log.1, .2, ...). Sin tope, el archivo llenaba el disco.
+    local_max_mb: int = 10
+    local_backups: int = 3
 
 
 @dataclass(slots=True)
@@ -385,6 +389,8 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
         channels=list(not_raw.get("channels") or [{"type": "local"}]),
         timeout_s=float(_get(not_raw, "timeout_s", 8)),
         max_attempts=max(1, int(_get(not_raw, "max_attempts", 8))),
+        local_max_mb=int(_get(not_raw, "local_max_mb", 10)),
+        local_backups=int(_get(not_raw, "local_backups", 3)),
     )
     token_env = str(_get(dash_raw, "auth_token_env", "DASHBOARD_TOKEN"))
     dashboard = DashboardCfg(
@@ -483,6 +489,10 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
         )
     if not 0.5 <= notify.timeout_s <= 60:
         errors.append(f"notify.timeout_s fuera de rango 0.5..60: {notify.timeout_s}")
+    if notify.local_max_mb < 1:
+        errors.append(f"notify.local_max_mb debe ser >= 1: {notify.local_max_mb}")
+    if notify.local_backups < 0:
+        errors.append(f"notify.local_backups debe ser >= 0: {notify.local_backups}")
     valid_channels = {"local", "telegram", "discord"}
     for ch in notify.channels:
         if not isinstance(ch, dict) or ch.get("type") not in valid_channels:

@@ -59,6 +59,35 @@ VERIFY_WORKERS = 4
 VERIFY_QUEUE_MAX = 64
 
 
+def purge_rotated_logs(alerts_path: str | Path, cutoff_ts: int) -> int:
+    """Borra las copias rotadas de ``alerts.log`` anteriores al corte.
+
+    Sólo se tocan archivos hermanos llamados ``<nombre>.<n>``: nada de symlinks,
+    ni subdirectorios, ni rutas fuera del directorio del log. Devuelve cuántas
+    copias se eliminaron.
+    """
+    base = Path(alerts_path)
+    borradas = 0
+    try:
+        candidatas = sorted(base.parent.glob(base.name + ".*"))
+        padre = base.parent.resolve()
+    except OSError:
+        return 0
+    for ruta in candidatas:
+        try:
+            if ruta.is_symlink() or not ruta.is_file():
+                continue
+            if ruta.parent.resolve() != padre:
+                continue
+            if int(ruta.stat().st_mtime * 1000) >= cutoff_ts:
+                continue
+            ruta.unlink()
+            borradas += 1
+        except OSError:
+            continue
+    return borradas
+
+
 def safe_unlink_scan(scans_dir: str | Path, candidate: str | Path) -> bool:
     """Elimina un XML de escaneo sólo si está realmente dentro de ``scans_dir``.
 
@@ -457,6 +486,7 @@ class Sensor:
         purged["xml"] = sum(
             1 for ruta in rutas if safe_unlink_scan(self.cfg.paths.scans_dir, ruta)
         )
+        purged["alerts_rotados"] = purge_rotated_logs(self.cfg.paths.alerts_log, cutoff)
         return purged
 
     def _heartbeat(self, conn, ts: int) -> None:
