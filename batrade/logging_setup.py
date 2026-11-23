@@ -13,7 +13,47 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from batrade.redact import redactar, secretos_conocidos
+
 _LOGGERS: dict[str, logging.Logger] = {}
+
+
+class RedactingFilter(logging.Filter):
+    """Tapa tokens y webhooks en el mensaje, los argumentos y los campos.
+
+    Se instala en cada handler, no en el logger: así también cubre los registros
+    que emiten librerías y los que llegan con `exc_info`.
+    """
+
+    def __init__(self, secretos: tuple[str, ...] | None = None) -> None:
+        super().__init__()
+        self._secretos = secretos
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        record.msg = redactar(record.msg, self._secretos)
+        if record.args:
+            if isinstance(record.args, dict):
+                record.args = {k: (redactar(v, self._secretos)
+                                   if isinstance(v, str) else v)
+                               for k, v in record.args.items()}
+            else:
+                record.args = tuple(redactar(a, self._secretos)
+                                    if isinstance(a, str) else a
+                                    for a in record.args)
+        campos = getattr(record, "fields", None)
+        if isinstance(campos, dict):
+            record.fields = {
+                k: (redactar(v, self._secretos) if isinstance(v, str) else v)
+                for k, v in campos.items()
+            }
+        if record.exc_info is not None:
+            # El traceback también puede arrastrar la URL con el token.
+            record.exc_text = redactar(
+                logging.Formatter().formatException(record.exc_info), self._secretos)
+            record.exc_info = None
+        elif record.exc_text:
+            record.exc_text = redactar(record.exc_text, self._secretos)
+        return True
 
 
 class JsonFormatter(logging.Formatter):
@@ -31,6 +71,8 @@ class JsonFormatter(logging.Formatter):
             payload.update(extra)
         if record.exc_info:
             payload["exc"] = self.formatException(record.exc_info)
+        elif record.exc_text:
+            payload["exc"] = record.exc_text
         return json.dumps(payload, ensure_ascii=False, default=str)
 
 
@@ -60,11 +102,13 @@ def setup_logging(log_dir: Path, component: str = "batrade", level: int = loggin
         encoding="utf-8",
     )
     fh.setFormatter(JsonFormatter())
+    fh.addFilter(RedactingFilter(secretos_conocidos()))
     logger.addHandler(fh)
 
     if console:
         ch = logging.StreamHandler(sys.stderr)
         ch.setFormatter(HumanFormatter())
+        ch.addFilter(RedactingFilter(secretos_conocidos()))
         logger.addHandler(ch)
 
     _LOGGERS[component] = logger

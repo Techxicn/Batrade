@@ -133,8 +133,25 @@ class Sensor:
 
     # ------------------------------------------------------------------ setup
     def _env(self) -> dict[str, str]:
+        """Sólo las variables que necesita el notificador (S-03).
+
+        Nada de heredar el entorno completo: si un día se añade un token nuevo,
+        se declara en su canal y sólo ese nombre viaja al `Notifier`.
+        """
         import os
-        return dict(os.environ)
+
+        nombres: set[str] = set()
+        for canal in self.cfg.notify.channels:
+            if not isinstance(canal, dict):
+                continue
+            tipo = str(canal.get("type", ""))
+            if tipo == "telegram":
+                nombres.add(str(canal.get("token_env") or "TELEGRAM_TOKEN"))
+                nombres.add(str(canal.get("chat_id_env") or "TELEGRAM_CHAT_ID"))
+            elif tipo == "discord":
+                nombres.add(str(canal.get("webhook_env") or "DISCORD_WEBHOOK"))
+        return {nombre: os.environ[nombre] for nombre in sorted(nombres)
+                if os.environ.get(nombre)}
 
     def _load_baseline(self) -> Baseline:
         b = Baseline()

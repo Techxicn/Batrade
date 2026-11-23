@@ -19,6 +19,7 @@ from typing import Callable, Iterator
 
 from batrade.detect.observation import NEIGH, Observation
 from batrade.net.iputil import normalize_mac, valid_ipv4
+from batrade.net.proc import env_minimo
 
 log = logging.getLogger("batrade.neigh")
 
@@ -45,7 +46,7 @@ def read_neighbors(iface: str | None = None) -> dict[str, str]:
         cmd += ["dev", iface]
     try:
         out = subprocess.run(cmd, capture_output=True, text=True, timeout=8,
-                             check=False).stdout
+                             check=False, env=env_minimo()).stdout
     except (OSError, subprocess.SubprocessError) as exc:
         log.warning("no se pudo leer la tabla de vecinos: %s", exc)
         return {}
