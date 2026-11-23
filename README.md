@@ -207,7 +207,16 @@ The sensor has five modes (`sensor.mode`: `auto`, `live`, `degraded`, `replay`, 
 | `simulate` | `scapy` | Feeds the engine with built-in synthetic scenarios |
 | `auto` | — | Picks `live` or `degraded` based on available capabilities |
 
-**Flow engine (off by default).** `flow.enabled: false` keeps the sensor exactly as it was: no extra thread, no extra callback on the sniffer. When enabled, the sniffer hands every raw packet to `batrade/flow`, which groups conversations into a `flow.window_s` window, extracts features and scores each closed flow; a score above `flow.anomaly_threshold` becomes a `flow_anomaly` warning stored like any other finding. This iteration ships the skeleton only: the bundled `DummyScorer` always returns `0.0`, so the engine runs the whole path and emits nothing. The scorer is an interface (`fit` / `score`); a real model plugs in behind it without touching the engine.
+**Flow engine (off by default).** `flow.enabled: false` keeps the sensor exactly as it was: no extra thread, no extra callback on the sniffer. When enabled, the sniffer hands every raw packet to `batrade/flow`, which groups conversations into a `flow.window_s` window, extracts features and scores each closed flow; a score above `flow.anomaly_threshold` becomes a `flow_anomaly` warning stored like any other finding.
+
+The scorer is an isolation forest written against `numpy` (no scikit-learn), fed with a baseline of normal traffic:
+
+```bash
+pip install '.[ml]'                      # numpy, optional extra
+python scripts/train_baseline.py --pcap fixtures/pcaps/baseline.pcap --out var/flow_model
+```
+
+That writes `var/flow_model.npz` (the trees) and `var/flow_model.json` (format version, tree count, seed, training date, pcap hash, Batrade version). Without a model — or without `numpy` — the engine falls back to `DummyScorer`, logs `modelo no entrenado` and emits nothing. There is a synthetic baseline capture in `fixtures/pcaps/baseline.pcap` (normal sessions, DNS and ARP) so the command works out of the box; retrain on a capture of *your* network before trusting it. Scores stay at or below `0.9` for flows inside the baseline and climb towards `1.0` only beyond it, so a threshold of `0.95` means "nothing like this was in the baseline" while `0.99` demands an even clearer outlier.
 
 ## Port scanning, UDP and scheduling
 

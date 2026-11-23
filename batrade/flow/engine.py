@@ -13,13 +13,14 @@ import logging
 import queue
 import threading
 import time
+from pathlib import Path
 
 from batrade.config import Config
 from batrade.detect.observation import Finding
 from batrade.flow.collector import FlowCollector
 from batrade.flow.features import extract
 from batrade.flow.flow import Flow
-from batrade.flow.scorer import DummyScorer, Scorer
+from batrade.flow.scorer import DummyScorer, IsolationForestScorer, Scorer
 
 log = logging.getLogger("batrade.flow.engine")
 
@@ -39,7 +40,7 @@ class FlowEngine:
     def __init__(self, cfg: Config, scorer: Scorer | None = None,
                  on_finding=None):
         self.cfg = cfg
-        self.scorer: Scorer = scorer or DummyScorer()
+        self.scorer: Scorer = scorer if scorer is not None else self._scorer_por_defecto()
         self.on_finding = on_finding
         self.threshold = float(cfg.flow.anomaly_threshold)
         self.collector = FlowCollector(cfg.flow.window_s)
@@ -49,6 +50,28 @@ class FlowEngine:
         # Hallazgos cuando no hay callback (depuración y tests).
         self.emitted: list[Finding] = []
         self.descartados = 0
+
+    def _scorer_por_defecto(self) -> Scorer:
+        """Isolation Forest si hay modelo entrenado; si no, el centinela.
+
+        Sin modelo el motor sigue arrancando (colector, features, cola) pero no
+        emite nada: es preferible a puntuar con un modelo inventado.
+        """
+        if not self.cfg.flow.enabled:
+            return DummyScorer()
+        base = Path(str(self.cfg.flow.model_path))
+        ruta_npz, ruta_json = Path(str(base) + ".npz"), Path(str(base) + ".json")
+        if not (ruta_npz.is_file() and ruta_json.is_file()):
+            log.warning("modelo no entrenado; el motor no emitirá nada (%s)", base)
+            return DummyScorer()
+        try:
+            modelo = IsolationForestScorer.load(ruta_npz, ruta_json)
+        except Exception as exc:  # noqa: BLE001 - fichero roto o numpy ausente
+            log.warning("no se pudo cargar el modelo de flujos (%s): %s", base, exc)
+            return DummyScorer()
+        log.info("modelo de flujos cargado: %s (%d flujos de entrenamiento)",
+                 base, modelo.n_flows)
+        return modelo
 
     # --------------------------------------------------------------- ciclo
     def enqueue(self, packet, ts: int) -> bool:
@@ -109,7 +132,7 @@ class FlowEngine:
     def _evaluar(self, flujo: Flow) -> Finding | None:
         """Puntúa un flujo cerrado y devuelve el hallazgo si supera el umbral."""
         caracteristicas = extract(flujo)
-        score = float(self.scorer.score(flujo))
+        score = float(self.scorer.score(caracteristicas))
         if score <= self.threshold:
             return None
         hallazgo = Finding(

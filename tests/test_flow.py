@@ -126,7 +126,8 @@ def test_features_devuelve_las_claves_esperadas():
     assert isinstance(caracteristicas, FlowFeatures)
     assert set(dataclasses.asdict(caracteristicas)) == {
         "packets", "bytes", "bytes_por_direccion", "tamano_medio",
-        "desviacion_estandar_tiempo_entre_paquetes", "ratio_syn_ack",
+        "desviacion_estandar_tiempo_entre_paquetes", "intervalo_medio_ms",
+        "regularidad_intervalos", "ratio_syn_ack",
         "puertos_distintos_por_ip_origen", "destinos_distintos_por_ip_origen",
     }
     assert caracteristicas.packets == 4
@@ -145,12 +146,13 @@ def test_features_con_flujo_vacio_no_revienta():
     assert caracteristicas.tamano_medio == 0.0
     assert caracteristicas.ratio_syn_ack == 0.0
     assert caracteristicas.desviacion_estandar_tiempo_entre_paquetes == 0.0
-    assert caracteristicas.bytes_por_direccion == {}
+    assert caracteristicas.bytes_por_direccion is None
 
 
-def test_ratio_syn_ack_sin_acks_es_el_numero_de_syn():
+def test_ratio_syn_ack_sin_acks_es_el_numero_de_syn_y_se_acota():
     escaneo = _flujo_lleno(syn_count=12, ack_count=0)
-    assert extract(escaneo).ratio_syn_ack == 12.0
+    # 12 SYN sin ACK superan el tope: el resto es ruido para el modelo (D-09).
+    assert extract(escaneo).ratio_syn_ack == 10.0
 
 
 # --------------------------------------------------------------------------- #
@@ -290,7 +292,7 @@ def test_un_on_packet_roto_no_tumba_la_captura(monkeypatch):
 def test_flow_apagado_por_defecto(cfg):
     assert cfg.flow.enabled is False
     assert cfg.flow.window_s == 60
-    assert cfg.flow.anomaly_threshold == 0.99
+    assert cfg.flow.anomaly_threshold == 0.95
 
 
 @pytest.mark.parametrize("bloque", ["window_s: 0", "window_s: 7200",

@@ -100,7 +100,9 @@ class FlowCfg:
     # Ventana de agrupación, medida desde el primer paquete de cada flujo.
     window_s: int = 60
     # Puntuación a partir de la cual un flujo es anómalo.
-    anomaly_threshold: float = 0.99
+    anomaly_threshold: float = 0.95
+    # Ruta base del modelo entrenado, sin extensión: el código añade .npz y .json.
+    model_path: Path = Path("var/flow_model")
 
 
 @dataclass(slots=True)
@@ -255,6 +257,12 @@ def _parse_exclude(raw: Any, errors: list[str]) -> tuple[str, ...]:
             continue
         out.append(str(red))
     return tuple(dict.fromkeys(out))
+
+
+def _ruta_modelo(valor: Any, base: Path) -> Path:
+    """Ruta del modelo sin extensión; relativa a la raíz del proyecto."""
+    ruta = Path(str(valor))
+    return ruta if ruta.is_absolute() else (base / ruta)
 
 
 def load_config(path: str | Path = "config.yaml", root: str | Path | None = None) -> Config:
@@ -420,7 +428,8 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
     flow = FlowCfg(
         enabled=bool(_get(flow_raw, "enabled", False)),
         window_s=int(_get(flow_raw, "window_s", 60)),
-        anomaly_threshold=float(_get(flow_raw, "anomaly_threshold", 0.99)),
+        anomaly_threshold=float(_get(flow_raw, "anomaly_threshold", 0.95)),
+        model_path=_ruta_modelo(_get(flow_raw, "model_path", "var/flow_model"), base),
     )
     if not 1 <= flow.window_s <= 3600:
         errors.append(f"flow.window_s debe estar entre 1 y 3600: {flow.window_s}")

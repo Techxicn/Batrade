@@ -90,7 +90,12 @@ flow:
   window_s: 60
   # Puntuación a partir de la cual un flujo es anómalo (0..1). Con el scorer de
   # reserva (DummyScorer) nunca se alcanza: el motor arranca pero no emite nada.
-  anomaly_threshold: 0.99
+  # 0.95 deja fuera de la línea base (scores <= 0.90 en entrenamiento) y detecta
+  # la baliza C2 sintética (0.9826); 0.99 la dejaba pasar.
+  anomaly_threshold: 0.95
+  # Modelo entrenado, sin extensión: se cargan flow_model.npz (árboles) y
+  # flow_model.json (metadatos). Se genera con scripts/train_baseline.py.
+  model_path: var/flow_model
 
 notify:
   # Canales activos. 'local' escribe en var/alerts.log y siempre está disponible.

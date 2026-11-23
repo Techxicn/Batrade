@@ -17,6 +17,9 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = ["pytest>=8"]
+# Extra opcional para el motor de flujos (Isolation Forest). Sin él, el scoring
+# usa DummyScorer y el motor no emite nada.
+ml = ["numpy>=1.26"]
 
 [project.scripts]
 batrade = "batrade.cli:main"
