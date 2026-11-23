@@ -163,6 +163,8 @@ Selection order:
 
 `cidr: auto` derives a normalized CIDR (for example `192.168.0.0/24`) from the chosen interface. `gateway_ip: null` adopts the default route only when it belongs to the monitored subnet; otherwise the gateway stays unset and the dashboard says so.
 
+**`dhcp_server_ip` from the config always wins.** When it is set, the DHCP rule compares every `DHCPOFFER` against that address and a different server is an immediate `crit`. Left empty, the sensor *learns* the first DHCP server it sees: convenient on day one, and blind to a rogue server that answers before the real one. `doctor` warns while the server is being learned and suggests pinning it in `config.yaml`.
+
 List the interfaces with their kind, address, MAC and whether they carry the default route:
 
 ```bash

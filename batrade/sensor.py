@@ -229,8 +229,10 @@ class Sensor:
             gw = None
         b.gateway_ip = gw
         b.gateway_mac = store.get_meta(self.conn, "gateway_mac")
-        b.dhcp_server_ip = (store.get_meta(self.conn, "dhcp_server_ip")
-                            or self.cfg.network.dhcp_server_ip)
+        # La configuración manda: si el operador fija el servidor DHCP, el valor
+        # aprendido (o el que quedó guardado) no puede sustituirlo.
+        b.dhcp_server_ip = (self.cfg.network.dhcp_server_ip
+                            or store.get_meta(self.conn, "dhcp_server_ip"))
         b.exceptions = set(self.cfg.detect.arp_exceptions)
         b.learning = baseline_status(self.conn)["learning"]
         return b

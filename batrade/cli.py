@@ -190,6 +190,18 @@ def _capture_label(hb) -> str | None:
     return f"{captura.get('estado', '?')}  ·  {hace}  ·  {tipos}"
 
 
+def _dhcp_aprendido(hb) -> str | None:
+    """Servidor DHCP que el motor está usando, según el último latido."""
+    if hb is None or not hb["detalle"]:
+        return None
+    try:
+        motor = json.loads(hb["detalle"]).get("engine") or {}
+    except (TypeError, ValueError):
+        return None
+    valor = motor.get("dhcp_server_ip") if isinstance(motor, dict) else None
+    return str(valor) if valor else None
+
+
 def whoami() -> str:
     """Usuario efectivo del proceso, con su uid."""
     uid = os.geteuid()
@@ -327,6 +339,11 @@ def cmd_doctor(cfg: Config, _args) -> int:
     aviso_env = env_permissions_warning(cfg.root)
     if aviso_env:
         print(f"  aviso           : {aviso_env}")
+    if not cfg.network.dhcp_server_ip:
+        aprendido = _dhcp_aprendido(hb)
+        if aprendido:
+            print(f"  aviso           : servidor DHCP aprendido dinámicamente "
+                  f"({aprendido}); fíjalo en config.yaml → network.dhcp_server_ip")
     for note in cfg.warnings:
         print(f"  aviso           : {note}")
     for note in notes:
