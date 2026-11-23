@@ -202,6 +202,9 @@ def _parse_risky(raw: Any, errors: list[str]) -> dict[tuple[str, int], RiskyPort
         if proto not in ("tcp", "udp"):
             errors.append(f"scan.risky_ports: protocolo inválido {proto!r} en puerto {port}")
             continue
+        if (proto, port) in out:
+            errors.append(f"scan.risky_ports: {proto}/{port} está duplicado")
+            continue
         out[(proto, port)] = RiskyPort(
             port=port,
             protocol=proto,
@@ -475,6 +478,11 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
         errors.append(f"scan.quick_periodic_hours debe ser >= 1: {scan.quick_periodic_hours}")
     if scan.weekly_rescan_days < 1:
         errors.append(f"scan.weekly_rescan_days debe ser >= 1: {scan.weekly_rescan_days}")
+    # Un timeout absurdo bloquea un worker de escaneo durante horas.
+    for nombre in ("standard_timeout", "quick_timeout", "udp_timeout"):
+        valor = getattr(scan, nombre)
+        if valor > 3600:
+            errors.append(f"scan.{nombre} no puede superar 3600 s: {valor}")
     if not 1 <= dashboard.port <= 65535:
         errors.append(f"dashboard.port inválido: {dashboard.port}")
     if not 1 <= dashboard.live_poll_s <= 60:

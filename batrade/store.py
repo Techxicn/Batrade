@@ -734,10 +734,16 @@ RESET_TABLES_KEEP_DEVICES = (
 )
 
 
-def table_counts(conn: sqlite3.Connection) -> dict[str, int]:
-    """Filas por tabla de datos, para el resumen previo al reset."""
+def table_counts(conn: sqlite3.Connection,
+                 tables: Iterable[str] | None = None) -> dict[str, int]:
+    """Filas por tabla de datos, para el resumen previo al reset.
+
+    ``tables`` sólo admite nombres de la lista de mantenimiento: nada que venga
+    de fuera puede acabar dentro de un ``SELECT``.
+    """
+    nombres = _validar_tablas(RESET_TABLES_ALL if tables is None else tables)
     out: dict[str, int] = {}
-    for table in RESET_TABLES_ALL:
+    for table in nombres:
         try:
             row = conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()
             out[table] = int(row["n"]) if row else 0
@@ -746,8 +752,19 @@ def table_counts(conn: sqlite3.Connection) -> dict[str, int]:
     return out
 
 
+def _validar_tablas(tables: Iterable[str]) -> tuple[str, ...]:
+    """Valida los nombres contra el conjunto permitido (defensa en profundidad)."""
+    permitidas = set(RESET_TABLES_ALL)
+    nombres = tuple(tables)
+    for nombre in nombres:
+        if nombre not in permitidas:
+            raise ValueError(f"tabla no permitida en mantenimiento: {nombre!r}")
+    return nombres
+
+
 def _reset_tables(conn: sqlite3.Connection, tables: tuple[str, ...]) -> dict[str, int]:
     """Vacía las tablas indicadas en una única transacción."""
+    tables = _validar_tablas(tables)
     counts: dict[str, int] = {}
     conn.execute("BEGIN IMMEDIATE")
     try:

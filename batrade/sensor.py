@@ -186,14 +186,23 @@ class Sensor:
         self.started_ts = now_ms()
         self.oui = OuiDB.load(cfg.paths.oui_file)
         self.conn = db.initialize(cfg.paths.db)
-        recovered = db.recover_interrupted(self.conn, now_ms())
-        if any(recovered.values()):
-            log.info("estado recuperado tras reinicio", extra={"fields": recovered})
-        self.engine = Engine(cfg, self._load_baseline())
-        self.discovery = Discovery(cfg, self.caps)
-        self.notifier = Notifier(cfg, lambda: db.connect(cfg.paths.db),
-                                 env=self._env())
-        self._wire_sensor_identity()
+        try:
+            recovered = db.recover_interrupted(self.conn, now_ms())
+            if any(recovered.values()):
+                log.info("estado recuperado tras reinicio", extra={"fields": recovered})
+            self.engine = Engine(cfg, self._load_baseline())
+            self.discovery = Discovery(cfg, self.caps)
+            self.notifier = Notifier(cfg, lambda: db.connect(cfg.paths.db),
+                                     env=self._env())
+            self._wire_sensor_identity()
+        except BaseException:
+            # Un fallo a mitad de la construcción no puede dejar la conexión
+            # abierta: el proceso de arranque la perdería para siempre.
+            try:
+                self.conn.close()
+            except Exception:  # noqa: BLE001
+                pass
+            raise
 
     # ------------------------------------------------------------------ setup
     def _env(self) -> dict[str, str]:
