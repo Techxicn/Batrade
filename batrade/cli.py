@@ -200,6 +200,23 @@ def whoami() -> str:
     return f"{nombre} (uid {uid})"
 
 
+def env_permissions_warning(root: Path) -> str | None:
+    """Avisa si `.env` (secretos de canal) es legible por grupo u otros.
+
+    No se toca el archivo: el operador decide con `chmod 600 .env`.
+    """
+    ruta = Path(root) / ".env"
+    try:
+        info = ruta.stat()
+    except OSError:
+        return None
+    modo = info.st_mode & 0o777
+    if not modo & 0o077:
+        return None
+    return (f"{ruta} tiene permisos {oct(modo)} y contiene secretos: "
+            "ejecuta `chmod 600 .env`")
+
+
 def var_owner_warning(var_dir: Path, euid: int | None = None) -> str | None:
     """Avisa si el CLI corre como root sobre un `var/` de otro usuario.
 
@@ -307,6 +324,9 @@ def cmd_doctor(cfg: Config, _args) -> int:
     aviso_var = var_owner_warning(cfg.paths.db.parent)
     if aviso_var:
         print(f"  aviso           : {aviso_var}")
+    aviso_env = env_permissions_warning(cfg.root)
+    if aviso_env:
+        print(f"  aviso           : {aviso_env}")
     for note in cfg.warnings:
         print(f"  aviso           : {note}")
     for note in notes:
@@ -444,6 +464,9 @@ def cmd_init(cfg: Config, _args) -> int:
     print(f"Interfaz vigilada: {cfg.network.interface or '(ninguna)'}  ·  "
           f"subred {cfg.network.cidr}  ·  gateway {gw or 'sin definir'}")
     print(f"Directorio de escaneos: {cfg.paths.scans_dir}")
+    aviso_env = env_permissions_warning(cfg.root)
+    if aviso_env:
+        print(f"  aviso: {aviso_env}")
     print("Siguiente paso: `python3 -m batrade sensor --mode degraded` y "
           "`python3 -m batrade dashboard` en otra terminal.")
     return 0

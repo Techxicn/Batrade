@@ -8,6 +8,7 @@ from __future__ import annotations
 import json
 import logging
 import logging.handlers
+import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -86,6 +87,22 @@ class HumanFormatter(logging.Formatter):
         return f"{ts} {record.levelname:<7} {record.name:<18} {record.getMessage()}{tail}"
 
 
+class _RotatingFileHandler(logging.handlers.RotatingFileHandler):
+    """Rotación que crea el archivo con 600, también tras cada rollover.
+
+    `RotatingFileHandler` usa el umask del proceso (normalmente 022), así que un
+    log con nombres de equipos nacía legible por todo el sistema.
+    """
+
+    def _open(self):  # noqa: ANN202 - firma de la clase base
+        flujo = super()._open()
+        try:
+            os.chmod(self.baseFilename, 0o600)
+        except OSError:
+            pass
+        return flujo
+
+
 def setup_logging(log_dir: Path, component: str = "batrade", level: int = logging.INFO,
                   console: bool = True) -> logging.Logger:
     """Configura (idempotente) el logger del componente."""
@@ -93,11 +110,15 @@ def setup_logging(log_dir: Path, component: str = "batrade", level: int = loggin
         return _LOGGERS[component]
 
     log_dir.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chmod(log_dir, 0o700)  # sólo el usuario del sensor
+    except OSError:
+        pass
     logger = logging.getLogger(component)
     logger.setLevel(level)
     logger.propagate = False
 
-    fh = logging.handlers.RotatingFileHandler(
+    fh = _RotatingFileHandler(
         log_dir / f"{component}.log", maxBytes=2 * 1024 * 1024, backupCount=5,
         encoding="utf-8",
     )
