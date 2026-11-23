@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 from batrade import __version__, db, store
-from batrade.config import Config, ConfigError, load
+from batrade.config import Config, ConfigError, load, validar_host_expuesto
 from batrade.logging_setup import setup_logging
 from batrade.net import caps as caps_mod
 from batrade.net import ifaces
@@ -691,10 +691,18 @@ def cmd_dashboard(cfg: Config, args) -> int:
 
     host = args.host or cfg.dashboard.host
     port = args.port or cfg.dashboard.port
+    # --host se salta config.yaml, así que la regla de exposición se vuelve a
+    # aplicar aquí con la misma función que usa load_config. El token es el
+    # efectivo (DASHBOARD_TOKEN del entorno/.env o el del fichero): es el que la
+    # app va a exigir, así que no vale con que exista en otro sitio.
+    error = validar_host_expuesto(host, cfg.dashboard.auth_token)
+    if error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        print("       Para el acceso remoto usa un túnel SSH o un reverse proxy "
+              "con TLS (README, «Remote access to the panel»).", file=sys.stderr)
+        return 1
     app = create_app(cfg)
     print(f"Panel en http://{host}:{port}  (Ctrl+C para detener)")
-    if host not in ("127.0.0.1", "localhost", "::1") and not cfg.dashboard.auth_token:
-        print("  ADVERTENCIA: expuesto fuera de loopback sin DASHBOARD_TOKEN", file=sys.stderr)
     app.run(host=host, port=port, debug=False, use_reloader=False, threaded=True)
     return 0
 

@@ -269,6 +269,24 @@ def _ruta_modelo(valor: Any, base: Path) -> Path:
     return ruta if ruta.is_absolute() else (base / ruta)
 
 
+# Hosts que no exponen el panel fuera de la máquina.
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def validar_host_expuesto(host: str, token: str | None) -> str | None:
+    """Error si ``host`` saca el panel de loopback sin token; ``None`` si vale.
+
+    Una sola regla para los dos caminos que pueden mover el panel:
+    ``dashboard.host`` en config.yaml (lo valida ``load_config``) y
+    ``batrade dashboard --host``, que se salta el YAML. Con la regla duplicada
+    uno de los dos acaba olvidándose, y fue el de la CLI: sólo advertía.
+    """
+    if host in LOOPBACK_HOSTS or token:
+        return None
+    return (f"dashboard.host={host!r} expone el panel fuera de loopback: "
+            "definir DASHBOARD_TOKEN en .env (RNF-05)")
+
+
 def load_config(path: str | Path = "config.yaml", root: str | Path | None = None) -> Config:
     """Carga config.yaml y valida todo lo que puede romper el arranque."""
     cfg_path = Path(path)
@@ -558,11 +576,9 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
             "dashboard.live_poll_s fuera de rango 1..60: "
             f"{dashboard.live_poll_s}"
         )
-    if dashboard.host not in ("127.0.0.1", "localhost", "::1") and not dashboard.auth_token:
-        errors.append(
-            f"dashboard.host={dashboard.host!r} expone el panel fuera de loopback: "
-            "definir DASHBOARD_TOKEN en .env (RNF-05)"
-        )
+    error_host = validar_host_expuesto(dashboard.host, dashboard.auth_token)
+    if error_host:
+        errors.append(error_host)
     if not 0.5 <= notify.timeout_s <= 60:
         errors.append(f"notify.timeout_s fuera de rango 0.5..60: {notify.timeout_s}")
     if notify.local_max_mb < 1:
