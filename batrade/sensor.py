@@ -538,18 +538,21 @@ class Sensor:
                 self._enqueue_scan(ScanJob(ip=ip, profile="standard", device_id=device_id),
                                    origin="auto")
                 continue
-            if device["estado_confianza"] == "confiable":
-                last_standard = store.last_scan_ts(conn, device_id, "standard")
-                if last_standard is None or ts - last_standard > weekly_ms:
-                    # Un intento reciente sin resultado (timeout o XML a medias)
-                    # ya cuenta como backoff del objetivo: un equipo que no
-                    # responde no puede reescanearse en cada barrido.
-                    intento = store.last_scan_ts(conn, device_id, "standard",
-                                                 only_ok=False)
-                    if intento is not None and ts - intento <= quick_ms:
-                        continue
-                    atrasados.append((last_standard or 0, ip, device_id))
+            last_ok = store.last_scan_ts(conn, device_id, "standard")
+            intento_std = store.last_scan_ts(conn, device_id, "standard", only_ok=False)
+            confiable = device["estado_confianza"] == "confiable"
+            # Un `standard` pendiente: el semanal de un equipo confiable o el
+            # primer perfilado que no llegó a completarse (L-03), aunque el
+            # equipo siga siendo desconocido.
+            pendiente = last_ok is None and intento_std is not None
+            if pendiente or (confiable and (last_ok is None or ts - last_ok > weekly_ms)):
+                # El intento reciente sin resultado ya cuenta como backoff del
+                # objetivo: un equipo que no responde no puede reescanearse en
+                # cada barrido.
+                if intento_std is not None and ts - intento_std <= quick_ms:
                     continue
+                atrasados.append((last_ok or 0, ip, device_id))
+                continue
             if ts - int(last) > quick_ms:
                 self._enqueue_scan(ScanJob(ip=ip, profile="quick", device_id=device_id),
                                    origin="auto")

@@ -157,3 +157,20 @@ def test_unknown_ip_is_ignored(conn, cfg):
     sensor = _sensor(cfg)
     sensor._schedule_scans(conn, {"10.10.10.77": "x"}, 1_000_000)
     assert _jobs(sensor) == []
+
+
+def test_primer_standard_fallido_se_reintenta_como_standard(conn, cfg):
+    """L-03: un equipo desconocido cuyo primer `standard` falla no se queda sin perfilar."""
+    cfg.scan.enabled = True
+    did = _device(conn, "3c:22:fb:11:22:33", "10.10.10.50")   # desconocido
+    _scan(conn, did, "standard", ts=1_000_000, estado="error")
+
+    # Justo después del fallo no se reintenta (mismo backoff que un confiable).
+    sensor = _sensor(cfg)
+    sensor._schedule_scans(conn, {"10.10.10.50": "x"}, 1_000_000 + 60_000)
+    assert _jobs(sensor) == []
+
+    # Pasada la ventana vuelve a pedir `standard`, no `quick`.
+    sensor = _sensor(cfg)
+    sensor._schedule_scans(conn, {"10.10.10.50": "x"}, 1_000_000 + DIA_MS + HORA_MS)
+    assert _jobs(sensor) == [("10.10.10.50", "standard")]
