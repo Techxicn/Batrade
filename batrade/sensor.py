@@ -15,6 +15,7 @@ import json
 import logging
 import queue
 import signal
+import sqlite3
 import threading
 import time
 from dataclasses import dataclass, replace
@@ -949,9 +950,15 @@ class Sensor:
             verificacion = {"estado": estado, "motivo": explanation}
         conn = db.connect(self.cfg.paths.db)
         try:
-            store.set_event_verified(conn, event_id, bool(confirmed),
-                                     {"verificacion": verificacion,
-                                      "macs_observadas": sorted(macs or [])})
+            try:
+                store.set_event_verified(conn, event_id, bool(confirmed),
+                                         {"verificacion": verificacion,
+                                          "macs_observadas": sorted(macs or [])})
+            except sqlite3.OperationalError as exc:
+                # Base ocupada: la alerta ya está guardada, sólo se pierde la
+                # anotación. Se registra el evento y la causa, sin ruido de pila.
+                log.warning("verificación ARP no registrada (evento %s): %s",
+                            event_id, exc)
         finally:
             conn.close()
 
