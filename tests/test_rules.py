@@ -194,3 +194,16 @@ def test_dhcp_server_is_learned_when_unknown(engine):
                       op="offer", extra={"yiaddr": HOST_IP, "msg_type": 2})
     assert engine.observe(obs) == []
     assert engine.baseline.dhcp_server_ip == "10.10.10.3"
+
+
+def test_el_gateway_no_adopta_la_mac_del_atacante(engine, arp):
+    """L-01: decisión tomada. El binding del gateway conserva la MAC legítima.
+
+    Si el sensor adoptara la MAC del primer atacante, el segundo ataque se
+    compararía contra la del atacante y pasaría por «vuelta a la normalidad».
+    """
+    engine.observe(arp(1000, GW_IP, GW_MAC))
+    engine.observe(arp(2000, GW_IP, ATTACKER_MAC))               # primer spoof
+    findings = engine.observe(arp(3000, GW_IP, "aa:bb:cc:00:99:99"))  # segundo
+    segundo = next(f for f in findings if f.tipo == "arp_gateway_mac_change")
+    assert segundo.detalle["prev_mac"] == GW_MAC

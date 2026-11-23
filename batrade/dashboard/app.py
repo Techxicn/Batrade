@@ -15,6 +15,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import re
 import secrets
 import sqlite3
@@ -37,6 +38,7 @@ if TYPE_CHECKING:  # sólo para anotaciones: `from __future__ import annotations
 
 TRUST_LABEL = {"confiable": "Confiable", "desconocido": "Desconocido",
                "no_autorizado": "No autorizado"}
+log = logging.getLogger("batrade.dashboard")
 SEV_LABEL = {"info": "Informativo", "warn": "Advertencia", "crit": "Crítico"}
 SEV_ICON = {"info": "·", "warn": "!", "crit": "!!"}
 
@@ -364,9 +366,10 @@ def create_app(cfg: Config) -> Flask:
         value = request.form.get("disposicion", "sin_evaluar")
         try:
             store.set_disposition(conn, event_id, value)
-            flash("Disposición registrada (alimenta el KPI de falsos positivos)", "ok")
-        except ValueError as exc:
-            flash(str(exc), "error")
+        except ValueError:
+            # Entrada inválida: 400 y nada escrito (antes se aceptaba en silencio).
+            abort(400, description="Disposición inválida")
+        flash("Disposición registrada (alimenta el KPI de falsos positivos)", "ok")
         return redirect(request.referrer or url_for("events"))
 
     # ---------------------------------------------------- panel en vivo (JSON)
@@ -474,6 +477,20 @@ def create_app(cfg: Config) -> Flask:
     def _404(_exc):  # noqa: ANN202
         return render_template("error.html", code=404,
                                message="Ese recurso no existe"), 404
+
+    @app.errorhandler(sqlite3.OperationalError)
+    def _db_error(exc):  # noqa: ANN202
+        texto = str(exc).lower()
+        if "locked" in texto or "busy" in texto:
+            return render_template(
+                "error.html", code=503,
+                message=("La base de datos está ocupada (el sensor está escribiendo). "
+                         "Espera unos segundos y vuelve a intentarlo."),
+            ), 503
+        # Cualquier otro error de SQLite es un fallo real: no se disfraza de 503.
+        log.exception("error de base de datos en el panel: %s", exc)
+        return render_template("error.html", code=500,
+                               message="Error interno de la base de datos"), 500
 
     @app.errorhandler(400)
     def _400(exc):  # noqa: ANN202
