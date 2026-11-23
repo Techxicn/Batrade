@@ -7,6 +7,10 @@ network:
   # una red concreta, pon el nombre real de la interfaz; `python3 -m batrade
   # interfaces` las lista con su IP, MAC y tipo.
   interface: auto
+  # Interfaz de captura (puerto espejo). null = usar network.interface.
+  # Puede no tener IPv4: es lo normal en un SPAN. El descubrimiento, el gateway
+  # y la verificación ARP siguen usando network.interface.
+  capture_interface: null
   # auto = deriva la subred (CIDR normalizado) de la IP y la máscara.
   cidr: auto
   # Vacío/null = puerta de enlace por defecto de la tabla de rutas, sólo si
@@ -76,6 +80,27 @@ detect:
   arp_exceptions: []
   # Cooldown de deduplicación por clave de evento (RF-16).
   cooldown_s: 300
+
+flow:
+  # Motor de anomalías por flujo (batrade/flow). Apagado por defecto: con false
+  # el sensor se comporta exactamente igual que sin este módulo.
+  enabled: false
+  # Ventana de agrupación de cada conversación, en segundos desde su primer
+  # paquete. Rango 1..3600.
+  window_s: 60
+  # Puntuación a partir de la cual un flujo es anómalo (0..1). Con el scorer de
+  # reserva (DummyScorer) nunca se alcanza: el motor arranca pero no emite nada.
+  # 0.95 deja fuera de la línea base (scores <= 0.90 en entrenamiento) y detecta
+  # la baliza C2 sintética (0.9826); 0.99 la dejaba pasar.
+  anomaly_threshold: 0.95
+  # Modelo entrenado, sin extensión: se cargan flow_model.npz (árboles) y
+  # flow_model.json (metadatos). Se genera con scripts/train_baseline.py.
+  model_path: var/flow_model
+  # Segmentador (D-07): none | kmeans | segmentado.
+  #   none      -> sólo el Isolation Forest global.
+  #   kmeans    -> IF global + etiqueta de segmento en cada flujo (no cambia el score).
+  #   segmentado-> un IF por segmento; un segmento pequeño cae al IF global.
+  segmenter: kmeans
 
 notify:
   # Canales activos. 'local' escribe en var/alerts.log y siempre está disponible.

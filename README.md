@@ -61,13 +61,15 @@ The repository installer:
 sudo bash install.sh --system                          # install to /opt/batrade
 sudo bash install.sh --system --install-deps --start   # + system packages, then start sensor and panel
 sudo bash install.sh --system --prefix /srv/batrade --dry-run   # show the plan, change nothing
+bash install.sh --proxy                                # print the TLS reverse-proxy recipe, install nothing
 sudo bash install.sh --uninstall                       # remove code and command, keep var/, .env, config.yaml
 sudo bash install.sh --uninstall --purge --yes         # also delete data and configuration
 ```
 
 - Runs as root; otherwise it tells you to use `sudo`.
 - Copies the repository **without** `.git`, `var/`, `.venv`, `.env` or build cruft, creates the virtualenv inside the prefix and installs the package there.
-- Writes `/usr/local/bin/batrade` as a small wrapper that pins `BATRADE_ROOT` to the prefix and execs the venv binary, so `batrade` works from any directory. It warns if that directory is not in `PATH` (sudo commonly uses `secure_path`).
+- Writes `/usr/local/bin/batrade` as a small wrapper that pins `BATRADE_ROOT` to the prefix and execs the venv binary, so `batrade` works from any directory. It warns if that directory is not in `PATH` (sudo commonly uses `secure_path`). `BATRADE_BIN_DIR` overrides that directory — needed when you run more than one instance (see *Multi-VLAN*).
+- `--proxy` needs no root and installs nothing: it prints the Caddy/Nginx recipe, the `openssl rand -hex 32` line for `DASHBOARD_TOKEN` and the reminder that the Flask stays on `127.0.0.1:8000`.
 - **Upgrades preserve state**: an existing `config.yaml`, `.env` and `var/` are reused, never overwritten.
 - `--dry-run` prints every step and changes nothing. `--start` launches sensor and dashboard at the end.
 - `--uninstall` refuses while a CLI-managed component is alive, removes the wrapper and the code, and keeps `var/`, `.env` and `config.yaml`; `--purge` deletes those too after asking you to type `BORRAR` (`--yes` skips the prompt).
@@ -167,6 +169,8 @@ Selection order:
 
 Pin `gateway_ip` for the same reason. With `null` the sensor adopts the default route at every start; that is right for a laptop that moves between networks, but a fixed gateway is what turns *the gateway changed its MAC* into an immediate `crit` instead of a quiet re-learning. `gateway_ip` from the config (or from the stored baseline) wins over the route.
 
+**Mirror port (SPAN): `capture_interface`.** Leave it `null` when the sensor captures on the interface it is managed through. On a switch port mirror, set `network.capture_interface` to the monitoring NIC: the sniffer opens it in promiscuous mode so it keeps every replicated frame, not only the ones addressed to the sensor. That NIC usually has no IPv4 and that is fine — `doctor` says so and the sweep, the gateway learning and the ARP verification keep using `network.interface`. If the capture NIC *does* have an address, discovery probes from it; if it does not, discovery falls back to the management interface, because `arp-scan` cannot transmit from a port without an address.
+
 List the interfaces with their kind, address, MAC and whether they carry the default route:
 
 ```bash
@@ -195,6 +199,8 @@ Wi-Fi works for discovery and netlink monitoring, but a managed-mode card cannot
 
 ## Sensor modes
 
+The sensor has five modes (`sensor.mode`: `auto`, `live`, `degraded`, `replay`, `simulate`). `auto` picks the best one the current process can actually run, and `doctor` shows the decision.
+
 | Mode | Requires | Description |
 |---|---|---|
 | `live` | `CAP_NET_RAW`, `arp-scan` | Passive packet sniffing + active ARP sweep + UDP pass |
@@ -202,6 +208,24 @@ Wi-Fi works for discovery and netlink monitoring, but a managed-mode card cannot
 | `replay` | `scapy` | Feeds the detection engine from a recorded `.pcap` file |
 | `simulate` | `scapy` | Feeds the engine with built-in synthetic scenarios |
 | `auto` | — | Picks `live` or `degraded` based on available capabilities |
+
+**Flow engine (off by default).** `flow.enabled: false` keeps the sensor exactly as it was: no extra thread, no extra callback on the sniffer. When enabled, the sniffer hands every raw packet to `batrade/flow`, which groups conversations into a `flow.window_s` window, extracts features and scores each closed flow; a score above `flow.anomaly_threshold` becomes a `flow_anomaly` warning stored like any other finding.
+
+The scorer is an isolation forest written against `numpy` (no scikit-learn), fed with a baseline of normal traffic:
+
+```bash
+pip install '.[ml]'                      # numpy, optional extra
+python scripts/train_baseline.py --pcap fixtures/pcaps/baseline.pcap --out var/flow_model
+# with segmentation (default kmeans; `segmentado` scores per segment):
+python scripts/train_baseline.py --pcap fixtures/pcaps/baseline.pcap \
+    --out var/flow_model --segmenter segmentado
+```
+
+`flow.segmenter` matches the flag: `none` scores with the global forest, `kmeans` keeps the same score and only labels each flow with its segment, `segmentado` scores with the forest of the flow's segment (a segment with fewer flows than the training minimum falls back to the global one). The number of segments is chosen once from the baseline (2..8, by silhouette) and stored in the JSON. `segmentado` is **experimental** (D-11): with a 60-flow synthetic baseline it *worsens* the separation (C2 0.9826 -> 0.9538, a normal flow 0.42 -> 0.83) because a 14-26 flow segment gives each score step a resolution of ~4 %. Do not enable it until you retrain with hundreds or thousands of flows per segment and the measurement improves.
+
+**What the flow engine sees, and what it does not.** The global Isolation Forest flags conversations that are globally rare: data exfiltration (large asymmetric byte counts), flows with an impossible shape, and connections to unusual destination ports. It does **not** detect long-period C2 beaconing with regular jitter (D-10): with ten per-flow features and one random feature per split, a single anomalous dimension is diluted, and a periodic beacon lands around the 97th percentile of the baseline (0.9826) rather than outside it. Beacon detection needs per-origin aggregate features and a real baseline of at least 300 flows with a maximum score <= 0.90; until that data exists the feature work is not open, and lowering the threshold will not create the capability. Port scans and host sweeps are still `SynScanRule` and `ArpSweepRule` territory, not the flow engine (D-09).
+
+That writes `var/flow_model.npz` (the trees) and `var/flow_model.json` (format version, tree count, seed, training date, pcap hash, Batrade version). Without a model — or without `numpy` — the engine falls back to `DummyScorer`, logs `modelo no entrenado` and emits nothing. There is a synthetic baseline capture in `fixtures/pcaps/baseline.pcap` (normal sessions, DNS and ARP) so the command works out of the box; retrain on a capture of *your* network before trusting it. Scores stay at or below `0.9` for flows inside the baseline and climb towards `1.0` only beyond it, so a threshold of `0.95` means "nothing like this was in the baseline" while `0.99` demands an even clearer outlier.
 
 ## Port scanning, UDP and scheduling
 
@@ -377,12 +401,7 @@ one `GET` every few seconds.
   plain HTTP on a LAN IP does not. In that case the notice stays in the page pop-up and
   the top bar explains why (same if the browser has no `Notification` support or the
   permission is blocked). To get browser notifications from another machine, forward the
-  port over SSH and open it as localhost:
-
-  ```bash
-  ssh -L 8000:127.0.0.1:8000 user@sensor-host
-  # then open http://localhost:8000 on your own machine
-  ```
+  port over SSH and open it as `localhost` — see *Remote access to the panel* below.
 
 - **Closed tab, no panel.** Polling lives in the page: closing the tab stops the notices,
   and a background tab slows down to 15 s while alerts pile up in the title. Telegram and
@@ -395,16 +414,102 @@ one `GET` every few seconds.
 - **What does not refresh.** On *Devices* the online state is still updated only on
   reload: doing it live would need another JSON route, which is out of scope.
 
-## Production deployment (systemd)
+## Remote access to the panel
 
-**The dashboard is a Flask development server on purpose.** Both `batrade dashboard` and the unit listen on `127.0.0.1` and are meant for one operator on the same machine: there is no WSGI/HTTPS layer to maintain. To reach it from another machine, forward the port over SSH — the tunnel keeps `localhost`, so the panel counts as a secure context and browser notifications keep working:
+The panel binds `127.0.0.1:8000` and is meant to stay there. To use it from another machine on the LAN there are two supported paths; both leave the Flask process on loopback and neither requires changing the panel code.
+
+### SSH tunnel (recommended)
+
+One command, no server to install on the sensor host:
 
 ```bash
 ssh -L 8000:127.0.0.1:8000 user@sensor-host
 # then open http://localhost:8000 on your own machine
 ```
 
-Do not expose port 8000 directly. If you ever put a reverse proxy in front, terminate TLS there and set `DASHBOARD_TOKEN` in `.env` (the panel refuses to start beyond loopback without a token).
+The tunnel keeps `localhost` as the origin on your machine, and `localhost` counts as a **secure context** for the browser. That matters beyond habit: `Notification` and the Web Audio switch only work in a secure context, so opening `http://192.168.1.20:8000` would silently lose browser notifications (the panel degrades to in-page pop-ups and says why). Through the tunnel everything behaves as if the panel ran locally.
+
+If port 8000 is already taken on your machine, forward to another local port — only the right-hand side must be the panel:
+
+```bash
+ssh -L 8001:127.0.0.1:8000 user@sensor-host
+# then open http://localhost:8001
+```
+
+Check that the tunnel is alive and the panel answers through it:
+
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" http://localhost:8000/health
+# 200
+```
+
+For a tunnel that survives disconnects, run it under `autossh` (`autossh -M 0 -f -N -L 8000:127.0.0.1:8000 user@sensor-host`) or as a `systemd --user` unit with `ExecStart=/usr/bin/ssh -N -L 8000:127.0.0.1:8000 user@sensor-host`.
+
+### Reverse proxy with TLS (advanced)
+
+Use this only when the panel must have its own hostname and certificate (several operators, bookmarks, no SSH client on the client machine). The proxy terminates TLS and talks to the panel over loopback; **`DASHBOARD_TOKEN` is mandatory** in this mode, because a proxy makes the panel reachable by anyone who can resolve the hostname.
+
+Caddy, which obtains and renews the certificate by itself for an internal name if your DNS/ACME setup allows it:
+
+```
+panel.example.lan {
+    reverse_proxy 127.0.0.1:8000
+}
+```
+
+Nginx with an existing certificate:
+
+```
+server {
+    listen 443 ssl;
+    server_name panel.example.lan;
+    ssl_certificate     /etc/ssl/certs/panel.crt;
+    ssl_certificate_key /etc/ssl/private/panel.key;
+    location / {
+        proxy_pass http://127.0.0.1:8000;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+    }
+}
+```
+
+Generate the token and put it in the `.env` of the user that runs the panel, then restart the dashboard unit:
+
+```bash
+openssl rand -hex 32
+# DASHBOARD_TOKEN=<the 64 hex characters>
+chmod 600 .env
+```
+
+With `DASHBOARD_TOKEN` set, every request needs a signed-in session; without it the panel answers 401 and never leaks event data. Changing the token invalidates the existing sessions.
+
+> **Never expose port 8000 directly.** `batrade dashboard` runs Flask's development server: no TLS, no request limits, no hardened WSGI layer. Config validation refuses to start with `dashboard.host` outside loopback unless `DASHBOARD_TOKEN` is set, and the systemd unit ships on `127.0.0.1`. `batrade dashboard --host` applies the same rule and refuses to start when the effective host leaves loopback without a token, so the tunnel and the proxy are the only two ways in.
+
+### Multi-VLAN (one instance per VLAN)
+
+The sniffer and the flow engine each work on a single interface, so multi-VLAN is handled with **one instance per VLAN** (D-04), not with several interfaces in one sensor. Each instance is a complete install with its own prefix, configuration and database:
+
+```bash
+sudo bash install.sh --system --prefix /opt/batrade-vlan10 --start
+sudo bash install.sh --system --prefix /opt/batrade-vlan20 --start
+```
+
+What changes from one instance to the next:
+
+| Per instance | Why |
+|---|---|
+| `network.capture_interface` | the mirror port of that VLAN (`eth1`, `eth2`, …) |
+| `network.cidr` (and `gateway_ip`) | the subnet that instance watches |
+| `dashboard.port` | `8000`, `8001`, … — two panels on loopback collide otherwise |
+| `BATRADE_BIN_DIR` | where the `batrade` wrapper lives: `/opt/batrade-vlan10/bin`, `/opt/batrade-vlan20/bin` |
+
+`var/`, the SQLite database, the logs, the pidfiles and the trained flow model all live under the prefix, so two instances never share a row, a file or a process. The one thing that does collide is the wrapper: `install.sh` writes it to `/usr/local/bin/batrade` unless `BATRADE_BIN_DIR` says otherwise, and a second install overwrites the first. Each wrapper pins `BATRADE_ROOT` to its own prefix, so the survivor points at the last instance installed — give each instance its own `BATRADE_BIN_DIR`, or drive them explicitly with `sudo /opt/batrade-vlan10/.venv/bin/batrade`.
+
+Both access methods from above apply unchanged: one tunnel per panel port (`ssh -L 8001:127.0.0.1:8001 user@sensor-host`) or one hostname per instance behind the reverse proxy (`panel-vlan10.example.lan`, `panel-vlan20.example.lan`).
+
+## Production deployment (systemd)
+
+**The dashboard is a Flask development server on purpose.** Both `batrade dashboard` and the unit listen on `127.0.0.1` and are meant for one operator on the same machine: there is no WSGI/HTTPS layer to maintain. To use it from another machine see *Remote access to the panel* above — an SSH tunnel by default, a TLS reverse proxy only if you need a hostname. Never expose port 8000 directly.
 
 The `deploy/` directory contains two unit files:
 
@@ -488,6 +593,9 @@ Tests cover the detection engine, rules, inventory, notification queue, store, d
 ## Project layout
 
 ```
+SECURITY.md        How to report a vulnerability, scope and disclosure timeline
+CONTRIBUTING.md    Tests, invariants, commit style and how to propose a change
+DECISIONS.md       Architecture decisions D-01..D-12 (local, not versioned)
 batrade/           Python package
   cli.py           Entry point, subcommands and root resolution
   daemon.py        Background start/stop/status; systemd guard
@@ -507,6 +615,12 @@ batrade/           Python package
     scenarios.py   Synthetic traffic for tests and demo
     sniffer.py     Passive packet capture (live mode)
     observation.py Normalized packet representation
+  flow/            Per-conversation anomaly detection (opt-in, `flow.enabled`)
+    flow.py        Flow record (5-tuple, counters, sizes, inter-arrival)
+    collector.py   Bidirectional flow grouping in time windows
+    features.py    Feature vector extracted from a closed flow
+    scorer.py      Scorer interface and the always-zero DummyScorer
+    engine.py      Queue + thread: packets -> flows -> scored findings
   net/             Network utilities
     caps.py        Capability detection and mode resolution
     ifaces.py      IPv4 interface discovery (Ethernet/Wi-Fi) and selection
@@ -534,4 +648,12 @@ REPORTE_*.md       Change reports (sanitization, install/VM)
 
 ## License
 
-No license file is included yet: choosing one is a pending decision of the project owner. Until then, treat the code as all rights reserved.
+**No licence is granted yet.** There is no `LICENSE` file and no licence field in `pyproject.toml`: all rights are reserved (D-12). The project is not open source, and no public release, binary or image may be published until the owner picks a licence and adds the file.
+
+What that means in practice:
+
+- **No external code contributions.** Patches are welcome as suggestions, not as contributions: accepting them now would create co-ownership and block the licence choice later (see `CONTRIBUTING.md`).
+- **The dependencies are not the blocker.** PyYAML (MIT), Flask (BSD-3-Clause), requests (Apache-2.0), defusedxml (PSFL) and numpy (BSD-3-Clause) are permissive; `scapy` is **GPL-2.0-only**, so nothing from its source may be copied into this tree and it has to stay an external dependency.
+- **The fixtures are synthetic.** `fixtures/pcaps/` is generated by `scripts/make_fixtures.py`; no third-party capture is bundled.
+
+Security reports do not depend on the licence: see `SECURITY.md` for the channel, the scope and the disclosure timeline, and `CONTRIBUTING.md` for how to run the tests, the invariants a change must keep and the commit style.

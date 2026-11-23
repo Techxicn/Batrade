@@ -21,7 +21,7 @@ from datetime import datetime
 from pathlib import Path
 
 from batrade import __version__, db, store
-from batrade.config import Config, ConfigError, load
+from batrade.config import Config, ConfigError, load, validar_host_expuesto
 from batrade.logging_setup import setup_logging
 from batrade.net import caps as caps_mod
 from batrade.net import ifaces
@@ -309,6 +309,24 @@ def cmd_doctor(cfg: Config, _args) -> int:
     detalle = f"{info.address()}, {info.kind}" if info else "sin IPv4"
     print(f"  interfaz        : {cfg.network.interface or '(ninguna)'} "
           f"({origen}; {detalle})")
+    cap_name = cfg.network.capture_interface
+    misma = not cap_name or cap_name == cfg.network.interface
+    cap_info = ifaces.find(cap_name) if cap_name else None
+    if misma:
+        cap_detalle = "misma que la de gestión"
+    elif cap_info is None:
+        cap_detalle = "sin datos"
+    elif not cap_info.ip:
+        cap_detalle = "sin IPv4 (normal en puerto espejo)"
+    else:
+        cap_detalle = f"{cap_info.address()}, {cap_info.kind}"
+    print(f"  captura         : {cap_name or '(ninguna)'} ({cap_detalle})")
+    if misma and cfg.capture_explicit:
+        print("  aviso           : network.capture_interface es igual a network.interface; "
+              "en un puerto espejo conviene separarlas")
+    elif not misma and cap_info is not None and not cap_info.ip:
+        print(f"  aviso           : {cap_name} no tiene IPv4 (normal en espejo); "
+              f"el barrido y la verificación usan {cfg.network.interface}")
     print(f"  subred          : {cfg.network.cidr}"
           f"{'  (derivada)' if cfg.cidr_auto else ''}")
     print(f"  gateway         : {cfg.network.gateway_ip or default_gateway() or 'desconocido'}")
@@ -673,10 +691,18 @@ def cmd_dashboard(cfg: Config, args) -> int:
 
     host = args.host or cfg.dashboard.host
     port = args.port or cfg.dashboard.port
+    # --host se salta config.yaml, así que la regla de exposición se vuelve a
+    # aplicar aquí con la misma función que usa load_config. El token es el
+    # efectivo (DASHBOARD_TOKEN del entorno/.env o el del fichero): es el que la
+    # app va a exigir, así que no vale con que exista en otro sitio.
+    error = validar_host_expuesto(host, cfg.dashboard.auth_token)
+    if error:
+        print(f"ERROR: {error}", file=sys.stderr)
+        print("       Para el acceso remoto usa un túnel SSH o un reverse proxy "
+              "con TLS (README, «Remote access to the panel»).", file=sys.stderr)
+        return 1
     app = create_app(cfg)
     print(f"Panel en http://{host}:{port}  (Ctrl+C para detener)")
-    if host not in ("127.0.0.1", "localhost", "::1") and not cfg.dashboard.auth_token:
-        print("  ADVERTENCIA: expuesto fuera de loopback sin DASHBOARD_TOKEN", file=sys.stderr)
     app.run(host=host, port=port, debug=False, use_reloader=False, threaded=True)
     return 0
 

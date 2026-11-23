@@ -18,6 +18,70 @@ Todos los tests pasan. La columna **Cubierto por tests** en el resumen final ind
 
 ---
 
+## Estado actual (cierre de la fase 6)
+
+Este informe se escribió con 314 tests y el código de `0.1.0` recién auditado.
+Las secciones siguientes se conservan **como registro histórico del triaje**: no
+se reescriben. Lo que sigue es el estado verificado hoy contra el árbol actual
+(suite de 480 tests), hallazgo por hallazgo.
+
+### Cerrados
+
+| ID | Cómo se cerró | Dónde |
+|----|---------------|-------|
+| F-01 | `LocalSink` rota por tamaño (`max_mb`, `backups`) y escribe con permisos 600; un `OSError` no tumba la cola | `notify.py:149-173` |
+| F-02 | Los hilos de verificación comparten `stop_event` y mueren con el sensor | `sensor.py:432-445`, `tests/test_verify_pool.py` |
+| F-03 | Toda conexión fija `PRAGMA busy_timeout` y `journal_mode=WAL` al abrirse | `db.py:206-209` |
+| F-04 | `probe_cidr` usa `selectors` (epoll) y cierra sockets en `finally` | `neigh.py:71-120` |
+| F-05 | `safe_unlink_scan` valida que el fichero esté dentro de `var/scans` antes de borrar | `sensor.py:126`, usado por sensor y CLI |
+| F-06 | `device_history` registra la IP por intervalo; la consulta filtra por dispositivo e IP vigente | `store.py:588-598` |
+| R-03 | `process_once` cierra la conexión en `finally` | `notify.py:235-247` |
+| R-05 | `table_counts` y `_reset_tables` validan los nombres contra `RESET_TABLES_ALL` | `store.py:737-767` |
+| S-01 | `redactar()` en errores de canal, en el texto enviado y en `alerts.log` | `notify.py:130,144,168,263` |
+| L-02 | El DHCP de `config.yaml` manda; sin config se aprende el primero y `doctor` avisa de que hay que fijarlo | `sensor.py`, `cli.py`, commit `85504ae` |
+| L-03 | Se reencola el `standard` fallido con `last_scan_ts(only_ok=False)`, escalonado por `max_concurrent` | `sensor.py:612+` |
+| D-01 | `_guard` cierra la conexión del hilo en `finally` (`_close_thread_conn`) | `sensor.py:346-361` |
+| D-02 | `BEGIN IMMEDIATE` + `ROLLBACK` en `BaseException`, con test de migración mixta DDL+DML | `db.py:319-327`, `tests/test_migrations.py` |
+| D-03 | `Sensor.__init__` cierra la conexión si falla a mitad de construcción | `sensor.py` |
+| M-02 | `_human_age` ya no existe: la edad se calcula en la plantilla/JS | dashboard |
+| M-05 | `Sensor._env()` pasa sólo las variables que declara cada canal | `sensor.py:216-230` |
+
+### Mitigados o parciales
+
+| ID | Estado |
+|----|--------|
+| R-04 | No reintenta netlink, pero `run()` degrada a sondeo TCP si el socket cae: la vigilancia no se queda muerta (`neigh.py:198-215`). |
+| S-03 | Sigue siendo un Flask de desarrollo **a propósito**. Ahora el arranque fuera de loopback sin `DASHBOARD_TOKEN` se rechaza en config y en `--host`, y el acceso remoto es túnel SSH o proxy TLS con token (README, D-03). |
+| M-03 | `list_devices` acepta `limit` (antes 500 fijo), pero el panel no lo expone ni avisa del truncado. |
+
+### Abiertos por decisión
+
+| ID | Motivo |
+|----|--------|
+| R-02 | `except Exception` en `_scan_worker`: se deja como está; el worker debe sobrevivir a cualquier fallo. |
+| S-04 | El token CSRF no rota: aceptado, no se cambia. |
+| L-01 | `ArpBindingRule` no actualiza `prev.mac` del gateway: aceptado. |
+
+### Abiertos sin decisión
+
+| ID | Estado |
+|----|--------|
+| S-02 | `load_dotenv` sigue haciendo `os.environ.setdefault` para cada clave del `.env`. |
+| D-04 | `load_config` sigue llamando `ensure_dirs()` como efecto secundario de validar. |
+| M-01 | `format_text` no sanea `detalle_json`; Telegram sí escapa el HTML y el log local va con permisos 600. |
+| M-04 | El DOCTYPE se elimina con una regex antes de `defusedxml`; sigue sin cubrir subconjuntos internos (`<!DOCTYPE x [ ... ]>`). |
+| L-04 | `apply_sweep` sigue consultando `en_linea = 1` sin filtrar por interfaz; con una instancia por VLAN (D-04) el escenario se reduce a una sola subred. |
+
+### Corrección del análisis
+
+- **R-01 no es un fallo.** El escenario descrito no se reproduce: no hay ningún
+  `except:` desnudo en `batrade/`, y `except Exception` **no** captura
+  `SystemExit` ni `KeyboardInterrupt` (derivan de `BaseException`). Lo que sí
+  existe es la supervisión de hilos (`_guard`), que registra la muerte del hilo y
+  alerta, que era el problema real detrás del hallazgo.
+
+---
+
 ## Índice
 
 1. [Fallos funcionales](#1-fallos-funcionales)

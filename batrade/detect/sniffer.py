@@ -22,8 +22,18 @@ DEFAULT_FILTER = "arp or udp port 67 or udp port 68 or (tcp and tcp[tcpflags] & 
 
 def sniff_observations(iface: str, on_observation: Callable[[Observation], None],
                        stop_event: threading.Event,
-                       bpf: str = DEFAULT_FILTER) -> None:
-    """Bucle de captura que respeta ``stop_event`` y no acumula paquetes."""
+                       bpf: str = DEFAULT_FILTER,
+                       sensor_mac: str | None = None,
+                       on_packet: Callable[[object, int], object] | None = None) -> None:
+    """Bucle de captura que respeta ``stop_event`` y no acumula paquetes.
+
+    ``sensor_mac`` sólo etiqueta la dirección de las observaciones (in/out); sin
+    él quedan en ``None``, que es lo correcto para un puerto espejo.
+
+    ``on_packet(pkt, ts)`` recibe cada paquete crudo **antes** de convertirlo
+    (lo usa el motor de flujos). Sin ``on_packet`` el comportamiento es el de
+    siempre: un único consumidor, ``on_observation``.
+    """
     try:
         from scapy.all import sniff
     except Exception as exc:  # noqa: BLE001
@@ -35,8 +45,15 @@ def sniff_observations(iface: str, on_observation: Callable[[Observation], None]
     def handle(pkt) -> None:
         nonlocal packets
         packets += 1
+        ts = int(time.time() * 1000)
+        if on_packet is not None:
+            # Un fallo del consumidor de flujos no puede tumbar la captura.
+            try:
+                on_packet(pkt, ts)
+            except Exception:  # noqa: BLE001
+                log.exception("fallo entregando el paquete al motor de flujos")
         try:
-            obs = observation_from_packet(pkt, int(time.time() * 1000))
+            obs = observation_from_packet(pkt, ts, iface=iface, sensor_mac=sensor_mac)
         except Exception:  # noqa: BLE001
             log.exception("no se pudo convertir un paquete")
             return
@@ -49,7 +66,13 @@ def sniff_observations(iface: str, on_observation: Callable[[Observation], None]
     while not stop_event.is_set():
         try:
             # store=False es obligatorio: acumular paquetes rompe el KPI de memoria.
-            sniff(iface=iface, filter=bpf, prn=handle, store=False, timeout=2)
+            # promisc=True es obligatorio en un puerto espejo (SPAN): el tráfico
+            # replicado conserva su MAC destino original (la del gateway, la del
+            # host que habla, difusión...), y sin modo promiscuo la tarjeta
+            # descarta en hardware toda trama cuya MAC destino no sea la suya.
+            # El filtro BPF se aplica después, así que no se procesa de más.
+            sniff(iface=iface, filter=bpf, prn=handle, store=False, timeout=2,
+                  promisc=True)
         except PermissionError:
             log.error("sin CAP_NET_RAW: sniffer deshabilitado")
             return

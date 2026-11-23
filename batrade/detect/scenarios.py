@@ -196,18 +196,47 @@ def write_pcap(scenario: str, path: str, cfg: Config, base_ts: int = BASE_TS) ->
     return path
 
 
-def observation_from_packet(pkt, ts: int) -> Observation | None:
-    """Traduce un paquete scapy a observación normalizada. None si no interesa."""
+def _direction(pkt, sensor_mac: str | None) -> str | None:
+    """``in``/``out`` respecto al sensor, o ``None`` si la trama no es suya.
+
+    Sólo se puede afirmar cuando la MAC del sensor aparece en la trama. En un
+    puerto espejo la mayor parte del tráfico es de terceros, y el switch no nos
+    dice por qué puerto entró: ahí se deja ``None`` en vez de inventar un valor.
+    """
+    if not sensor_mac:
+        return None
+    from scapy.all import Ether
+    if not pkt.haslayer(Ether):
+        return None
+    propio = normalize_mac(sensor_mac)
+    if normalize_mac(pkt[Ether].dst) == propio:
+        return "in"
+    if normalize_mac(pkt[Ether].src) == propio:
+        return "out"
+    return None
+
+
+def observation_from_packet(pkt, ts: int, iface: str | None = None,
+                            sensor_mac: str | None = None) -> Observation | None:
+    """Traduce un paquete scapy a observación normalizada. None si no interesa.
+
+    ``iface`` es la interfaz por la que se capturó (el puerto espejo); en replay
+    de pcap no hay una sola interfaz viva y se deja en ``None``. ``sensor_mac``
+    sólo sirve para etiquetar la dirección; sin él, ``direction`` queda en None.
+    """
     from scapy.all import ARP as ScapyARP
     from scapy.all import BOOTP, DHCP as ScapyDHCP, IP, TCP
 
+    direction = _direction(pkt, sensor_mac)
     if pkt.haslayer(ScapyARP):
         arp = pkt[ScapyARP]
         return Observation(
-            kind=ARP, ts=ts, ip_src=str(arp.psrc), mac_src=normalize_mac(arp.hwsrc),
+            kind=ARP, ts=ts, iface=iface, ip_src=str(arp.psrc),
+            mac_src=normalize_mac(arp.hwsrc),
             ip_dst=str(arp.pdst), mac_dst=normalize_mac(arp.hwdst),
             op="reply" if int(arp.op) == 2 else "request",
             extra={"gratuitous": str(arp.psrc) == str(arp.pdst)},
+            direction=direction,
         )
     if pkt.haslayer(BOOTP) and pkt.haslayer(ScapyDHCP):
         try:
@@ -216,19 +245,92 @@ def observation_from_packet(pkt, ts: int) -> Observation | None:
             mtype = 0
         if mtype in (2, 5):  # OFFER / ACK
             return Observation(
-                kind=DHCP, ts=ts, ip_src=pkt[IP].src, mac_src=normalize_mac(pkt.src),
+                kind=DHCP, ts=ts, iface=iface, ip_src=pkt[IP].src,
+                mac_src=normalize_mac(pkt.src),
                 op="offer" if mtype == 2 else "ack",
                 extra={"yiaddr": str(pkt[BOOTP].yiaddr), "msg_type": mtype},
+                direction=direction,
             )
         return None
     if pkt.haslayer(TCP) and pkt.haslayer(IP):
         tcp = pkt[TCP]
         return Observation(
-            kind=SYN, ts=ts, ip_src=pkt[IP].src, mac_src=normalize_mac(pkt.src),
+            kind=SYN, ts=ts, iface=iface, ip_src=pkt[IP].src,
+            mac_src=normalize_mac(pkt.src),
             ip_dst=pkt[IP].dst, port_dst=int(tcp.dport),
             extra={"flags": str(tcp.flags)},
+            direction=direction,
         )
     return None
+
+
+def write_baseline_pcap(path: str, cfg: Config, base_ts: int = BASE_TS,
+                        clientes: int = 30, semilla: int = 7) -> str:
+    """Escribe un pcap de **tráfico normal** para entrenar el motor de flujos.
+
+    Sesiones TCP completas con huecos irregulares, consultas DNS y ARP: lo que
+    un hogar produce sin atacante. Determinista para una ``semilla``. No usa
+    ``write_pcap`` porque ése materializa escenarios de ataque, y aquí hacen
+    falta respuestas (SYN-ACK, ACK, FIN) que un escenario de escaneo no tiene.
+    """
+    import random
+
+    from scapy.all import ARP as ScapyARP
+    from scapy.all import TCP, UDP, Ether, IP, Raw, wrpcap
+
+    c = _ctx(cfg)
+    rng = random.Random(semilla)
+    paquetes = []
+    t = base_ts / 1000.0
+    cliente_base = int(ipaddress.IPv4Address(c.victim_ip))
+
+    def empujar(pkt, retardo_ms: int) -> None:
+        nonlocal t
+        t += retardo_ms / 1000.0
+        pkt.time = t
+        paquetes.append(pkt)
+
+    def sesion(cliente: str, servidor: str, sport: int, dport: int) -> None:
+        mac_cli, mac_srv = c.victim_mac, GW_MAC
+        huecos = [rng.choice([70, 90, 120, 150, 200, 260, 340, 420]) for _ in range(6)]
+        cuerpo = bytes(rng.randrange(100, 1200) % 256 for _ in range(
+            rng.randrange(120, 1400)))
+        tcp_cli = dict(sport=sport, dport=dport)
+        tcp_srv = dict(sport=dport, dport=sport)
+        empujar(Ether(src=mac_cli, dst=mac_srv) / IP(src=cliente, dst=servidor) /
+                TCP(flags="S", **tcp_cli), 0)
+        empujar(Ether(src=mac_srv, dst=mac_cli) / IP(src=servidor, dst=cliente) /
+                TCP(flags="SA", **tcp_srv), huecos[0])
+        empujar(Ether(src=mac_cli, dst=mac_srv) / IP(src=cliente, dst=servidor) /
+                TCP(flags="A", **tcp_cli), huecos[1])
+        empujar(Ether(src=mac_cli, dst=mac_srv) / IP(src=cliente, dst=servidor) /
+                TCP(flags="PA", **tcp_cli) / Raw(cuerpo), huecos[2])
+        empujar(Ether(src=mac_srv, dst=mac_cli) / IP(src=servidor, dst=cliente) /
+                TCP(flags="A", **tcp_srv), huecos[3])
+        empujar(Ether(src=mac_srv, dst=mac_cli) / IP(src=servidor, dst=cliente) /
+                TCP(flags="FA", **tcp_srv) / Raw(cuerpo[: rng.randrange(40, 400)]),
+                huecos[4])
+        empujar(Ether(src=mac_cli, dst=mac_srv) / IP(src=cliente, dst=servidor) /
+                TCP(flags="A", **tcp_cli), huecos[5])
+
+    for i in range(clientes):
+        cliente = str(ipaddress.IPv4Address(cliente_base + i))
+        puerto = 40000 + i
+        sesion(cliente, str(ipaddress.IPv4Address(cliente_base + 120)), puerto, 80)
+        sesion(cliente, str(ipaddress.IPv4Address(cliente_base + 121)), puerto + 500, 443)
+        # DNS: pregunta y respuesta.
+        empujar(Ether(src=c.victim_mac, dst=GW_MAC) / IP(src=cliente, dst=c.gateway_ip) /
+                UDP(sport=50000 + i, dport=53) / Raw(b"\x12\x34" + bytes(28)), 60)
+        empujar(Ether(src=GW_MAC, dst=c.victim_mac) / IP(src=c.gateway_ip, dst=cliente) /
+                UDP(sport=53, dport=50000 + i) / Raw(bytes(80)), 40)
+        # ARP del cliente preguntando por el gateway.
+        empujar(Ether(src=c.victim_mac, dst="ff:ff:ff:ff:ff:ff") /
+                ScapyARP(op=1, hwsrc=c.victim_mac, psrc=cliente,
+                         hwdst="00:00:00:00:00:00", pdst=c.gateway_ip), 30)
+
+    paquetes.sort(key=lambda p: p.time)
+    wrpcap(path, paquetes)
+    return path
 
 
 def observations_from_pcap(path: str, speed: float = 0.0,

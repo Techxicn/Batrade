@@ -34,6 +34,9 @@ class ConfigError(Exception):
 @dataclass(slots=True)
 class NetworkCfg:
     interface: str = "eth0"
+    # Interfaz de captura (puerto espejo). Ya resuelta: si el YAML trae null,
+    # es igual a ``interface``. Puede no tener IPv4: es lo normal en un espejo.
+    capture_interface: str = "eth0"
     cidr: str = "192.168.1.0/24"
     gateway_ip: str | None = None
     dhcp_server_ip: str | None = None
@@ -89,6 +92,24 @@ class DetectCfg:
 
 
 @dataclass(slots=True)
+class FlowCfg:
+    """Motor de flujos (detector de anomalías por conversación)."""
+
+    # Apagado por defecto: el sensor se comporta igual que sin este módulo.
+    enabled: bool = False
+    # Ventana de agrupación, medida desde el primer paquete de cada flujo.
+    window_s: int = 60
+    # Puntuación a partir de la cual un flujo es anómalo.
+    anomaly_threshold: float = 0.95
+    # Ruta base del modelo entrenado, sin extensión: el código añade .npz y .json.
+    model_path: Path = Path("var/flow_model")
+    # Segmentador del artefacto: none | kmeans | segmentado (D-07).
+    # kmeans usa el IF global y etiqueta cada flujo con su segmento;
+    # segmentado puntúa con el IF del segmento (cae al global si es pequeño).
+    segmenter: str = "kmeans"
+
+
+@dataclass(slots=True)
 class NotifyCfg:
     channels: list[dict[str, Any]] = field(default_factory=lambda: [{"type": "local"}])
     timeout_s: float = 8.0
@@ -124,12 +145,15 @@ class Config:
     sensor: SensorCfg = field(default_factory=SensorCfg)
     scan: ScanCfg = field(default_factory=ScanCfg)
     detect: DetectCfg = field(default_factory=DetectCfg)
+    flow: FlowCfg = field(default_factory=FlowCfg)
     notify: NotifyCfg = field(default_factory=NotifyCfg)
     dashboard: DashboardCfg = field(default_factory=DashboardCfg)
     paths: PathsCfg = field(default_factory=PathsCfg)
     # Interfaz/subred resueltas automáticamente y avisos para el operador.
     interface_auto: bool = False
     cidr_auto: bool = False
+    # True si network.capture_interface venía en el YAML (no resuelta por defecto).
+    capture_explicit: bool = False
     warnings: list[str] = field(default_factory=list)
 
     @property
@@ -239,6 +263,30 @@ def _parse_exclude(raw: Any, errors: list[str]) -> tuple[str, ...]:
     return tuple(dict.fromkeys(out))
 
 
+def _ruta_modelo(valor: Any, base: Path) -> Path:
+    """Ruta del modelo sin extensión; relativa a la raíz del proyecto."""
+    ruta = Path(str(valor))
+    return ruta if ruta.is_absolute() else (base / ruta)
+
+
+# Hosts que no exponen el panel fuera de la máquina.
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def validar_host_expuesto(host: str, token: str | None) -> str | None:
+    """Error si ``host`` saca el panel de loopback sin token; ``None`` si vale.
+
+    Una sola regla para los dos caminos que pueden mover el panel:
+    ``dashboard.host`` en config.yaml (lo valida ``load_config``) y
+    ``batrade dashboard --host``, que se salta el YAML. Con la regla duplicada
+    uno de los dos acaba olvidándose, y fue el de la CLI: sólo advertía.
+    """
+    if host in LOOPBACK_HOSTS or token:
+        return None
+    return (f"dashboard.host={host!r} expone el panel fuera de loopback: "
+            "definir DASHBOARD_TOKEN en .env (RNF-05)")
+
+
 def load_config(path: str | Path = "config.yaml", root: str | Path | None = None) -> Config:
     """Carga config.yaml y valida todo lo que puede romper el arranque."""
     cfg_path = Path(path)
@@ -266,6 +314,7 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
     sen_raw = data.get("sensor") or {}
     scan_raw = data.get("scan") or {}
     det_raw = data.get("detect") or {}
+    flow_raw = data.get("flow") or {}
     not_raw = data.get("notify") or {}
     dash_raw = data.get("dashboard") or {}
     path_raw = data.get("paths") or {}
@@ -347,6 +396,7 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
 
     network = NetworkCfg(
         interface=interface,
+        capture_interface=interface,
         cidr=cidr,
         gateway_ip=gateway_ip,
         dhcp_server_ip=net_raw.get("dhcp_server_ip"),
@@ -356,6 +406,27 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
         network.gateway_ip = None
     if network.dhcp_server_ip in ("", "null", "None"):
         network.dhcp_server_ip = None
+
+    # --------------------------------------------------- interfaz de captura
+    # null/auto = la misma que la de gestión. Una explícita se valida: existe
+    # y no es loopback. Que no tenga IPv4 es lo normal en un puerto espejo, así
+    # que solo se avisa en `doctor`, no aquí.
+    pedida = str(net_raw.get("capture_interface") or "").strip()
+    capture_explicit = False
+    if pedida.lower() in ("", "null", "none", "auto"):
+        pedida = ""          # igual que el gateway: null entre comillas también vale
+    if pedida:
+        cap_info = ifaces.find(pedida)
+        if cap_info is None:
+            errors.append(
+                f"network.capture_interface inexistente en este sistema: {pedida}")
+        elif cap_info.loopback:
+            errors.append(
+                f"network.capture_interface no puede ser loopback: {pedida}")
+        else:
+            network.capture_interface = pedida
+            capture_explicit = True
+
     sensor = SensorCfg(
         mode=mode,
         sweep_interval=int(_get(sen_raw, "sweep_interval", 30)),
@@ -376,6 +447,21 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
         arp_exceptions=tuple(str(m).lower() for m in (det_raw.get("arp_exceptions") or [])),
         cooldown_s=int(_get(det_raw, "cooldown_s", 300)),
     )
+    flow = FlowCfg(
+        enabled=bool(_get(flow_raw, "enabled", False)),
+        window_s=int(_get(flow_raw, "window_s", 60)),
+        anomaly_threshold=float(_get(flow_raw, "anomaly_threshold", 0.95)),
+        model_path=_ruta_modelo(_get(flow_raw, "model_path", "var/flow_model"), base),
+        segmenter=str(_get(flow_raw, "segmenter", "kmeans")).strip().lower(),
+    )
+    if flow.segmenter not in ("none", "kmeans", "segmentado"):
+        errors.append(
+            f"flow.segmenter debe ser none, kmeans o segmentado: {flow.segmenter!r}")
+    if not 1 <= flow.window_s <= 3600:
+        errors.append(f"flow.window_s debe estar entre 1 y 3600: {flow.window_s}")
+    if not 0.0 <= flow.anomaly_threshold <= 1.0:
+        errors.append(
+            f"flow.anomaly_threshold debe estar entre 0 y 1: {flow.anomaly_threshold}")
     scan = ScanCfg(
         enabled=bool(_get(scan_raw, "enabled", True)),
         max_concurrent=max(1, int(_get(scan_raw, "max_concurrent", 2))),
@@ -490,11 +576,9 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
             "dashboard.live_poll_s fuera de rango 1..60: "
             f"{dashboard.live_poll_s}"
         )
-    if dashboard.host not in ("127.0.0.1", "localhost", "::1") and not dashboard.auth_token:
-        errors.append(
-            f"dashboard.host={dashboard.host!r} expone el panel fuera de loopback: "
-            "definir DASHBOARD_TOKEN en .env (RNF-05)"
-        )
+    error_host = validar_host_expuesto(dashboard.host, dashboard.auth_token)
+    if error_host:
+        errors.append(error_host)
     if not 0.5 <= notify.timeout_s <= 60:
         errors.append(f"notify.timeout_s fuera de rango 0.5..60: {notify.timeout_s}")
     if notify.local_max_mb < 1:
@@ -510,8 +594,10 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
         raise ConfigError(errors)
 
     cfg = Config(root=base, network=network, sensor=sensor, scan=scan,
-                 detect=detect, notify=notify, dashboard=dashboard, paths=paths,
-                 interface_auto=interface_auto, cidr_auto=cidr_auto, warnings=warnings)
+                 detect=detect, flow=flow, notify=notify, dashboard=dashboard,
+                 paths=paths,
+                 interface_auto=interface_auto, cidr_auto=cidr_auto,
+                 capture_explicit=capture_explicit, warnings=warnings)
     cfg.ensure_dirs()
     return cfg
 

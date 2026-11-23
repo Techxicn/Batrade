@@ -11,7 +11,14 @@
 #
 # Modo repositorio: --install-deps, --venv, --systemd, --link
 # Modo sistema:     --prefix DIR, --start, --dry-run
+# Acceso remoto:    --proxy (sólo imprime la receta del reverse proxy TLS)
 # Desinstalación:   --uninstall [--purge] [--yes] [--dry-run]
+#
+# Variables de entorno:
+#   BATRADE_BIN_DIR     directorio del comando `batrade` (defecto /usr/local/bin).
+#                       Con una instalación por VLAN, dale uno distinto a cada una
+#                       (p. ej. /opt/batrade-vlan10/bin) para que no se pisen.
+#   BATRADE_TEST_FAKE_ROOT=1   sólo pruebas: no exige root.
 #
 # No hace nada destructivo: comprueba, informa e inicializa la base de datos.
 set -euo pipefail
@@ -28,6 +35,7 @@ START_AFTER=0
 DRY_RUN=0
 UNINSTALL=0
 PURGE=0
+SHOW_PROXY=0
 ASSUME_YES=0
 
 usage() {
@@ -43,6 +51,7 @@ while [[ $# -gt 0 ]]; do
         --system) SYSTEM=1 ;;
         --start) START_AFTER=1 ;;
         --dry-run) DRY_RUN=1 ;;
+        --proxy) SHOW_PROXY=1 ;;
         --uninstall) UNINSTALL=1 ;;
         --purge) PURGE=1 ;;
         --yes|-y) ASSUME_YES=1 ;;
@@ -58,6 +67,53 @@ while [[ $# -gt 0 ]]; do
     shift
 done
 
+
+# --------------------------------------------------------------------------- #
+# --proxy: receta del reverse proxy TLS. No instala nada y no necesita root.
+# --------------------------------------------------------------------------- #
+do_proxy() {
+    cat <<'EOF'
+== Batrade · reverse proxy TLS delante del panel ==
+
+No se instala nada: sólo se imprime la receta. El panel sigue escuchando en
+127.0.0.1:8000; el proxy es el único que publica un puerto (443) y termina TLS.
+
+1) Token obligatorio. Sin DASHBOARD_TOKEN el panel no arranca fuera de loopback:
+
+     openssl rand -hex 32
+     # edita el .env del usuario que corre el panel y añade:
+     #   DASHBOARD_TOKEN=<los 64 caracteres hexadecimales>
+     chmod 600 .env
+     sudo systemctl restart batrade-dashboard     # o: batrade stop && batrade start
+
+2) Caddy (/etc/caddy/Caddyfile):
+
+     panel.example.lan {
+         reverse_proxy 127.0.0.1:8000
+     }
+
+3) Nginx equivalente (/etc/nginx/conf.d/panel.conf):
+
+     server {
+         listen 443 ssl;
+         server_name panel.example.lan;
+         ssl_certificate     /etc/ssl/certs/panel.crt;
+         ssl_certificate_key /etc/ssl/private/panel.key;
+         location / {
+             proxy_pass http://127.0.0.1:8000;
+             proxy_set_header Host $host;
+             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+         }
+     }
+
+Recuerda: el Flask es un servidor de desarrollo. NUNCA publiques :8000; el
+único puerto abierto debe ser el 443 del proxy. Sin proxy, el método oficial
+es el túnel SSH:
+
+     ssh -L 8000:127.0.0.1:8000 usuario@host-del-sensor
+EOF
+}
+
 say() { printf '  %-12s: %s\n' "$1" "$2"; }
 die() { echo "ERROR: $*" >&2; exit 1; }
 plan() { printf '  %-12s: [dry-run] %s\n' "plan" "$*"; }
@@ -68,6 +124,13 @@ run() {
     fi
     "$@"
 }
+
+# --proxy sale antes de todo lo demás: ni root, ni prefijo, ni
+# comprobaciones del entorno. Sólo imprime la receta.
+if ((SHOW_PROXY)); then
+    do_proxy
+    exit 0
+fi
 
 require_root() {
     if [[ $EUID -eq 0 ]]; then
