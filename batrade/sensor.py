@@ -160,6 +160,12 @@ class ScanJob:
 
 
 class Sensor:
+    """Orquesta los hilos de descubrimiento, detección, captura y notificación."""
+
+    # Valor por defecto a nivel de clase: `stop()` es idempotente y algunas
+    # pruebas construyen el sensor sin `__init__` (parcial).
+    flow_engine = None
+
     def __init__(self, cfg: Config, mode: str = "auto", *,
                  scenario: str | None = None, pcap: str | None = None,
                  speed: float = 5.0, duration: float | None = None):
@@ -181,6 +187,8 @@ class Sensor:
         self._verify_started = False
         self._threads: list[threading.Thread] = []
         self._supervisados: dict[str, dict] = {}
+        # Se crea en _sniff_loop sólo si flow.enabled (None = módulo apagado).
+        self.flow_engine = None
         self._ultima_obs_ts: int | None = None
         self._contadores = {"arp": 0, "syn": 0, "dhcp": 0, "neigh": 0}
         self.started_ts = now_ms()
@@ -305,6 +313,8 @@ class Sensor:
         self._closed = True
         self.stop_event.set()
         self.notifier.stop_event.set()
+        if self.flow_engine is not None:
+            self.flow_engine.stop()
         try:
             self.scan_queue.put_nowait(None)
         except queue.Full:
@@ -702,9 +712,30 @@ class Sensor:
                                                  source="sniff"))
             self._persist(c, findings, obs.ts)
 
-        sniff_observations(captura, handle, self.stop_event,
-                           sensor_mac=self.sensor_mac)
-        del conn
+        motor = None
+        if self.cfg.flow.enabled:
+            from batrade.flow import FlowEngine
+            motor = FlowEngine(self.cfg, on_finding=self._on_flow_finding)
+            self.flow_engine = motor
+            motor.start()
+            log.info("motor de flujos activo (ventana %ss)", self.cfg.flow.window_s)
+
+        try:
+            sniff_observations(captura, handle, self.stop_event,
+                               sensor_mac=self.sensor_mac,
+                               on_packet=motor.enqueue if motor is not None else None)
+        finally:
+            if motor is not None:
+                motor.stop()
+                self.flow_engine = None
+            del conn
+
+    def _on_flow_finding(self, finding) -> None:
+        """Persiste un hallazgo del motor de flujos por el camino de las reglas."""
+        try:
+            self._persist(self._conn(), [finding], now_ms())
+        except Exception:  # noqa: BLE001 - el sniffer no puede morir por esto
+            log.exception("no se pudo guardar el hallazgo de flujo")
 
     # ------------------------------------------------------------- escaneos
     def _enqueue_scan(self, job: ScanJob, origin: str = "auto") -> bool:

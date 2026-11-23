@@ -1,0 +1,140 @@
+"""Motor de flujos: cola de paquetes, colector, puntuación y hallazgos.
+
+Corre en su propio hilo y no toca el ``Engine`` de reglas. El sniffer entrega
+paquetes crudos con ``enqueue`` (nunca bloquea: si la cola está llena se
+descartan y se cuentan); aquí se agrupan en flujos, se extraen características
+y se puntúan. Un hallazgo se entrega a ``on_finding`` para que el sensor lo
+persista por el mismo camino que los de reglas.
+"""
+from __future__ import annotations
+
+import dataclasses
+import logging
+import queue
+import threading
+import time
+
+from batrade.config import Config
+from batrade.detect.observation import Finding
+from batrade.flow.collector import FlowCollector
+from batrade.flow.features import extract
+from batrade.flow.flow import Flow
+from batrade.flow.scorer import DummyScorer, Scorer
+
+log = logging.getLogger("batrade.flow.engine")
+
+COLA_MAX = 10_000
+# Cada cuánto despierta del `get` para cerrar flujos vencidos aunque no llegue
+# tráfico (un flujo que se queda callado también debe cerrarse).
+SIN_TRÁFICO_S = 0.5
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+class FlowEngine:
+    """Consume paquetes, cierra flujos y emite ``flow_anomaly``."""
+
+    def __init__(self, cfg: Config, scorer: Scorer | None = None,
+                 on_finding=None):
+        self.cfg = cfg
+        self.scorer: Scorer = scorer or DummyScorer()
+        self.on_finding = on_finding
+        self.threshold = float(cfg.flow.anomaly_threshold)
+        self.collector = FlowCollector(cfg.flow.window_s)
+        self.cola: queue.Queue = queue.Queue(maxsize=COLA_MAX)
+        self._parar = threading.Event()
+        self._hilo: threading.Thread | None = None
+        # Hallazgos cuando no hay callback (depuración y tests).
+        self.emitted: list[Finding] = []
+        self.descartados = 0
+
+    # --------------------------------------------------------------- ciclo
+    def enqueue(self, packet, ts: int) -> bool:
+        """Entrega un paquete crudo. Devuelve False si la cola está llena."""
+        try:
+            self.cola.put_nowait((packet, ts))
+            return True
+        except queue.Full:
+            self.descartados += 1
+            if self.descartados % 1000 == 1:
+                log.warning("cola de flujos llena: %d paquetes descartados",
+                            self.descartados)
+            return False
+
+    def start(self) -> None:
+        if self._hilo is not None and self._hilo.is_alive():
+            return
+        self._parar.clear()
+        self._hilo = threading.Thread(target=self._run, name="batrade-flow",
+                                      daemon=True)
+        self._hilo.start()
+
+    def stop(self, timeout: float = 5.0) -> None:
+        self._parar.set()
+        try:
+            self.cola.put_nowait(None)      # despierta al hilo
+        except queue.Full:
+            pass
+        if self._hilo is not None:
+            self._hilo.join(timeout=timeout)
+            self._hilo = None
+
+    def _run(self) -> None:
+        try:
+            while not self._parar.is_set():
+                try:
+                    item = self.cola.get(timeout=SIN_TRÁFICO_S)
+                except queue.Empty:
+                    self._cerrar(_now_ms())
+                    continue
+                if item is None:
+                    break
+                paquete, ts = item
+                for flujo in self.collector.add(paquete, ts):
+                    self._evaluar(flujo)
+                self._cerrar(_now_ms())
+        except Exception:  # noqa: BLE001 - el hilo no puede morir en silencio
+            log.exception("motor de flujos detenido por error")
+        finally:
+            for flujo in self.collector.flush(_now_ms()):
+                self._evaluar(flujo)
+
+    def _cerrar(self, ts: int) -> None:
+        for flujo in self.collector.expire(ts):
+            self._evaluar(flujo)
+
+    # ------------------------------------------------------------ puntuación
+    def _evaluar(self, flujo: Flow) -> Finding | None:
+        """Puntúa un flujo cerrado y devuelve el hallazgo si supera el umbral."""
+        caracteristicas = extract(flujo)
+        score = float(self.scorer.score(flujo))
+        if score <= self.threshold:
+            return None
+        hallazgo = Finding(
+            tipo="flow_anomaly",
+            severidad="warn",
+            clave=flujo.clave,
+            ip_origen=flujo.src_ip,
+            ip_destino=flujo.dst_ip,
+            detalle={
+                "resumen": (f"Flujo anómalo {flujo.src_ip} → {flujo.dst_ip}:"
+                            f"{flujo.dst_port} ({flujo.proto}, {flujo.packets} "
+                            f"paquetes, {flujo.bytes} B), puntuación {score:.2f}"),
+                "por_que": ("El modelo de flujos puntuó esta conversación por "
+                            "encima de flow.anomaly_threshold; su forma se "
+                            "parece poco a la de los flujos normales."),
+                "accion": ("Revisa el equipo de origen y confirma si ese tráfico "
+                           "es legítimo; si lo es, márcalo como falso positivo."),
+                "features": dataclasses.asdict(caracteristicas),
+                "score": round(score, 4),
+            },
+        )
+        self.emitted.append(hallazgo)
+        if self.on_finding is not None:
+            try:
+                self.on_finding(hallazgo)
+            except Exception:  # noqa: BLE001
+                log.exception("no se pudo entregar el hallazgo de flujo")
+        return hallazgo

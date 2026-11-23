@@ -81,6 +81,17 @@ detect:
   # Cooldown de deduplicación por clave de evento (RF-16).
   cooldown_s: 300
 
+flow:
+  # Motor de anomalías por flujo (batrade/flow). Apagado por defecto: con false
+  # el sensor se comporta exactamente igual que sin este módulo.
+  enabled: false
+  # Ventana de agrupación de cada conversación, en segundos desde su primer
+  # paquete. Rango 1..3600.
+  window_s: 60
+  # Puntuación a partir de la cual un flujo es anómalo (0..1). Con el scorer de
+  # reserva (DummyScorer) nunca se alcanza: el motor arranca pero no emite nada.
+  anomaly_threshold: 0.99
+
 notify:
   # Canales activos. 'local' escribe en var/alerts.log y siempre está disponible.
   channels:

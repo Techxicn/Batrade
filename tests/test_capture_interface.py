@@ -91,19 +91,23 @@ def test_el_sniffer_usa_la_interfaz_de_captura(cfg, monkeypatch):
     cfg.network.capture_interface = "sp0"
     llamadas = []
 
-    def falso_sniff(iface, on_observation, stop_event, sensor_mac=None):
-        llamadas.append({"iface": iface, "sensor_mac": sensor_mac})
+    def falso_sniff(iface, on_observation, stop_event, sensor_mac=None,
+                    on_packet=None):
+        llamadas.append({"iface": iface, "sensor_mac": sensor_mac,
+                         "on_packet": on_packet})
 
     monkeypatch.setattr("batrade.detect.sniffer.sniff_observations", falso_sniff)
     Sensor._sniff_loop(cast(Sensor, _SensorTonto(cfg)))
 
-    assert llamadas == [{"iface": "sp0", "sensor_mac": SENSOR_MAC}]
+    assert llamadas == [{"iface": "sp0", "sensor_mac": SENSOR_MAC,
+                         "on_packet": None}]
 
 
 def test_el_sniffer_cae_en_la_de_gestion_si_no_hay_captura(cfg, monkeypatch):
     llamadas = []
 
-    def falso_sniff(iface, on_observation, stop_event, sensor_mac=None):
+    def falso_sniff(iface, on_observation, stop_event, sensor_mac=None,
+                    on_packet=None):
         llamadas.append(iface)
 
     monkeypatch.setattr("batrade.detect.sniffer.sniff_observations", falso_sniff)

@@ -92,6 +92,18 @@ class DetectCfg:
 
 
 @dataclass(slots=True)
+class FlowCfg:
+    """Motor de flujos (detector de anomalías por conversación)."""
+
+    # Apagado por defecto: el sensor se comporta igual que sin este módulo.
+    enabled: bool = False
+    # Ventana de agrupación, medida desde el primer paquete de cada flujo.
+    window_s: int = 60
+    # Puntuación a partir de la cual un flujo es anómalo.
+    anomaly_threshold: float = 0.99
+
+
+@dataclass(slots=True)
 class NotifyCfg:
     channels: list[dict[str, Any]] = field(default_factory=lambda: [{"type": "local"}])
     timeout_s: float = 8.0
@@ -127,6 +139,7 @@ class Config:
     sensor: SensorCfg = field(default_factory=SensorCfg)
     scan: ScanCfg = field(default_factory=ScanCfg)
     detect: DetectCfg = field(default_factory=DetectCfg)
+    flow: FlowCfg = field(default_factory=FlowCfg)
     notify: NotifyCfg = field(default_factory=NotifyCfg)
     dashboard: DashboardCfg = field(default_factory=DashboardCfg)
     paths: PathsCfg = field(default_factory=PathsCfg)
@@ -271,6 +284,7 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
     sen_raw = data.get("sensor") or {}
     scan_raw = data.get("scan") or {}
     det_raw = data.get("detect") or {}
+    flow_raw = data.get("flow") or {}
     not_raw = data.get("notify") or {}
     dash_raw = data.get("dashboard") or {}
     path_raw = data.get("paths") or {}
@@ -403,6 +417,16 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
         arp_exceptions=tuple(str(m).lower() for m in (det_raw.get("arp_exceptions") or [])),
         cooldown_s=int(_get(det_raw, "cooldown_s", 300)),
     )
+    flow = FlowCfg(
+        enabled=bool(_get(flow_raw, "enabled", False)),
+        window_s=int(_get(flow_raw, "window_s", 60)),
+        anomaly_threshold=float(_get(flow_raw, "anomaly_threshold", 0.99)),
+    )
+    if not 1 <= flow.window_s <= 3600:
+        errors.append(f"flow.window_s debe estar entre 1 y 3600: {flow.window_s}")
+    if not 0.0 <= flow.anomaly_threshold <= 1.0:
+        errors.append(
+            f"flow.anomaly_threshold debe estar entre 0 y 1: {flow.anomaly_threshold}")
     scan = ScanCfg(
         enabled=bool(_get(scan_raw, "enabled", True)),
         max_concurrent=max(1, int(_get(scan_raw, "max_concurrent", 2))),
@@ -537,7 +561,8 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
         raise ConfigError(errors)
 
     cfg = Config(root=base, network=network, sensor=sensor, scan=scan,
-                 detect=detect, notify=notify, dashboard=dashboard, paths=paths,
+                 detect=detect, flow=flow, notify=notify, dashboard=dashboard,
+                 paths=paths,
                  interface_auto=interface_auto, cidr_auto=cidr_auto,
                  capture_explicit=capture_explicit, warnings=warnings)
     cfg.ensure_dirs()

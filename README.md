@@ -197,6 +197,8 @@ Wi-Fi works for discovery and netlink monitoring, but a managed-mode card cannot
 
 ## Sensor modes
 
+The sensor has five modes (`sensor.mode`: `auto`, `live`, `degraded`, `replay`, `simulate`). `auto` picks the best one the current process can actually run, and `doctor` shows the decision.
+
 | Mode | Requires | Description |
 |---|---|---|
 | `live` | `CAP_NET_RAW`, `arp-scan` | Passive packet sniffing + active ARP sweep + UDP pass |
@@ -204,6 +206,8 @@ Wi-Fi works for discovery and netlink monitoring, but a managed-mode card cannot
 | `replay` | `scapy` | Feeds the detection engine from a recorded `.pcap` file |
 | `simulate` | `scapy` | Feeds the engine with built-in synthetic scenarios |
 | `auto` | — | Picks `live` or `degraded` based on available capabilities |
+
+**Flow engine (off by default).** `flow.enabled: false` keeps the sensor exactly as it was: no extra thread, no extra callback on the sniffer. When enabled, the sniffer hands every raw packet to `batrade/flow`, which groups conversations into a `flow.window_s` window, extracts features and scores each closed flow; a score above `flow.anomaly_threshold` becomes a `flow_anomaly` warning stored like any other finding. This iteration ships the skeleton only: the bundled `DummyScorer` always returns `0.0`, so the engine runs the whole path and emits nothing. The scorer is an interface (`fit` / `score`); a real model plugs in behind it without touching the engine.
 
 ## Port scanning, UDP and scheduling
 
@@ -509,6 +513,12 @@ batrade/           Python package
     scenarios.py   Synthetic traffic for tests and demo
     sniffer.py     Passive packet capture (live mode)
     observation.py Normalized packet representation
+  flow/            Per-conversation anomaly detection (opt-in, `flow.enabled`)
+    flow.py        Flow record (5-tuple, counters, sizes, inter-arrival)
+    collector.py   Bidirectional flow grouping in time windows
+    features.py    Feature vector extracted from a closed flow
+    scorer.py      Scorer interface and the always-zero DummyScorer
+    engine.py      Queue + thread: packets -> flows -> scored findings
   net/             Network utilities
     caps.py        Capability detection and mode resolution
     ifaces.py      IPv4 interface discovery (Ethernet/Wi-Fi) and selection

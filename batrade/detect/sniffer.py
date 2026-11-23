@@ -23,11 +23,16 @@ DEFAULT_FILTER = "arp or udp port 67 or udp port 68 or (tcp and tcp[tcpflags] & 
 def sniff_observations(iface: str, on_observation: Callable[[Observation], None],
                        stop_event: threading.Event,
                        bpf: str = DEFAULT_FILTER,
-                       sensor_mac: str | None = None) -> None:
+                       sensor_mac: str | None = None,
+                       on_packet: Callable[[object, int], object] | None = None) -> None:
     """Bucle de captura que respeta ``stop_event`` y no acumula paquetes.
 
     ``sensor_mac`` sólo etiqueta la dirección de las observaciones (in/out); sin
     él quedan en ``None``, que es lo correcto para un puerto espejo.
+
+    ``on_packet(pkt, ts)`` recibe cada paquete crudo **antes** de convertirlo
+    (lo usa el motor de flujos). Sin ``on_packet`` el comportamiento es el de
+    siempre: un único consumidor, ``on_observation``.
     """
     try:
         from scapy.all import sniff
@@ -40,9 +45,15 @@ def sniff_observations(iface: str, on_observation: Callable[[Observation], None]
     def handle(pkt) -> None:
         nonlocal packets
         packets += 1
+        ts = int(time.time() * 1000)
+        if on_packet is not None:
+            # Un fallo del consumidor de flujos no puede tumbar la captura.
+            try:
+                on_packet(pkt, ts)
+            except Exception:  # noqa: BLE001
+                log.exception("fallo entregando el paquete al motor de flujos")
         try:
-            obs = observation_from_packet(pkt, int(time.time() * 1000),
-                                          iface=iface, sensor_mac=sensor_mac)
+            obs = observation_from_packet(pkt, ts, iface=iface, sensor_mac=sensor_mac)
         except Exception:  # noqa: BLE001
             log.exception("no se pudo convertir un paquete")
             return
