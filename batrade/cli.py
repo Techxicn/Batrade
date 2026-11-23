@@ -171,6 +171,37 @@ def _heartbeat_label(hb, stale_after_s: int = 45) -> str:
     return f"{_human_ms(ts)}  (hace {edad} s){aviso}"
 
 
+def _capture_label(hb) -> str | None:
+    """Estado de captura del último latido en una línea (D-01)."""
+    if hb is None or not hb["detalle"]:
+        return None
+    try:
+        captura = json.loads(hb["detalle"]).get("captura")
+    except (TypeError, ValueError):
+        return None
+    if not isinstance(captura, dict):
+        return None
+    contadores = captura.get("contadores") or {}
+    ultima = captura.get("ultima_obs_ts")
+    hace = ("sin observaciones" if ultima is None
+            else f"última obs. hace {captura.get('idle_s')} s")
+    tipos = " ".join(f"{k}={contadores.get(k, 0)}"
+                     for k in ("arp", "syn", "dhcp", "neigh"))
+    return f"{captura.get('estado', '?')}  ·  {hace}  ·  {tipos}"
+
+
+def _dhcp_aprendido(hb) -> str | None:
+    """Servidor DHCP que el motor está usando, según el último latido."""
+    if hb is None or not hb["detalle"]:
+        return None
+    try:
+        motor = json.loads(hb["detalle"]).get("engine") or {}
+    except (TypeError, ValueError):
+        return None
+    valor = motor.get("dhcp_server_ip") if isinstance(motor, dict) else None
+    return str(valor) if valor else None
+
+
 def whoami() -> str:
     """Usuario efectivo del proceso, con su uid."""
     uid = os.geteuid()
@@ -179,6 +210,23 @@ def whoami() -> str:
     except (KeyError, OSError):
         nombre = "desconocido"
     return f"{nombre} (uid {uid})"
+
+
+def env_permissions_warning(root: Path) -> str | None:
+    """Avisa si `.env` (secretos de canal) es legible por grupo u otros.
+
+    No se toca el archivo: el operador decide con `chmod 600 .env`.
+    """
+    ruta = Path(root) / ".env"
+    try:
+        info = ruta.stat()
+    except OSError:
+        return None
+    modo = info.st_mode & 0o777
+    if not modo & 0o077:
+        return None
+    return (f"{ruta} tiene permisos {oct(modo)} y contiene secretos: "
+            "ejecuta `chmod 600 .env`")
 
 
 def var_owner_warning(var_dir: Path, euid: int | None = None) -> str | None:
@@ -279,12 +327,23 @@ def cmd_doctor(cfg: Config, _args) -> int:
     print(f"  dispositivos    : {rows.get('total', 0)} "
           f"(en línea {rows.get('online', 0)}, desconocidos {rows.get('desconocidos', 0)})")
     print(f"  heartbeat       : {_heartbeat_label(hb, cfg.sensor.heartbeat_interval * 3)}")
+    captura = _capture_label(hb)
+    if captura:
+        print(f"  captura         : {captura}")
     pista = mode_hint(caps, mode)
     if pista:
         print(f"  pista           : {pista}")
     aviso_var = var_owner_warning(cfg.paths.db.parent)
     if aviso_var:
         print(f"  aviso           : {aviso_var}")
+    aviso_env = env_permissions_warning(cfg.root)
+    if aviso_env:
+        print(f"  aviso           : {aviso_env}")
+    if not cfg.network.dhcp_server_ip:
+        aprendido = _dhcp_aprendido(hb)
+        if aprendido:
+            print(f"  aviso           : servidor DHCP aprendido dinámicamente "
+                  f"({aprendido}); fíjalo en config.yaml → network.dhcp_server_ip")
     for note in cfg.warnings:
         print(f"  aviso           : {note}")
     for note in notes:
@@ -389,6 +448,7 @@ def cmd_status(cfg: Config, _args) -> int:
         print(f"  {info.name:<10} {info.state()}")
         print(f"  {'':<10} log: {info.logfile}")
     age: int | None = None
+    hb = None
     try:
         conn = db.connect(cfg.paths.db, readonly=True)
         try:
@@ -400,6 +460,9 @@ def cmd_status(cfg: Config, _args) -> int:
     except Exception:  # base inexistente o aún sin latido
         age = None
     print(f"  {'latido':<10} {'sin datos' if age is None else f'hace {age} s'}")
+    captura = _capture_label(hb)
+    if captura:
+        print(f"  {'captura':<10} {captura}")
     print(f"  {'usuario':<10} {whoami()}")
     print(f"  {'modo':<10} {mode}")
     for note in notes:
@@ -418,6 +481,9 @@ def cmd_init(cfg: Config, _args) -> int:
     print(f"Interfaz vigilada: {cfg.network.interface or '(ninguna)'}  ·  "
           f"subred {cfg.network.cidr}  ·  gateway {gw or 'sin definir'}")
     print(f"Directorio de escaneos: {cfg.paths.scans_dir}")
+    aviso_env = env_permissions_warning(cfg.root)
+    if aviso_env:
+        print(f"  aviso: {aviso_env}")
     print("Siguiente paso: `python3 -m batrade sensor --mode degraded` y "
           "`python3 -m batrade dashboard` en otra terminal.")
     return 0
@@ -544,6 +610,15 @@ def cmd_reset_db(cfg: Config, args) -> int:
             except OSError as exc:
                 print(f"  aviso: no se pudo vaciar {cfg.paths.alerts_log.name}: {exc}",
                       file=sys.stderr)
+        # Las copias rotadas del log de alertas también son artefactos de prueba.
+        for copia in sorted(cfg.paths.alerts_log.parent.glob(
+                cfg.paths.alerts_log.name + ".*")):
+            try:
+                if copia.is_symlink() or not copia.is_file():
+                    continue
+                copia.unlink()
+            except OSError:
+                continue
 
     print("Base reiniciada.")
     check = db.connect(cfg.paths.db, readonly=True)

@@ -159,3 +159,60 @@ def test_split_sql_keeps_complete_statements_only():
     assert len(statements) >= 10
     assert all(s.endswith(";") for s in statements)
     assert any(s.startswith("CREATE TABLE IF NOT EXISTS devices") for s in statements)
+
+
+def _migracion_mixta(version: int, sql: str) -> list:
+    return db.MIGRATIONS + [(version, sql)]
+
+
+def test_migracion_mixta_ddl_y_dml_aplica_todo(tmp_path, monkeypatch):
+    """BEGIN IMMEDIATE cubre DDL y DML: o entra todo o no entra nada."""
+    conn = db.initialize(tmp_path / "mixta.db")
+    try:
+        conn.execute(
+            "INSERT INTO devices(mac, ip_actual, first_seen, last_seen, "
+            "estado_confianza) VALUES('3c:22:fb:11:22:33','10.10.10.50',1,1,'confiable')")
+        version = db.SCHEMA_VERSION
+        pasos = _migracion_mixta(version + 1, (
+            "ALTER TABLE devices ADD COLUMN nota TEXT;\n"
+            "UPDATE devices SET nota = 'migrado';\n"
+            "INSERT INTO device_history(device_id, ts, evento) "
+            "SELECT id, 5, 'migracion' FROM devices;\n"
+        ))
+        monkeypatch.setattr(db, "MIGRATIONS", pasos)
+        monkeypatch.setattr(db, "SCHEMA_VERSION", version + 1)
+
+        assert db.migrate(conn) == version + 1
+        assert db.user_version(conn) == version + 1
+        fila = conn.execute("SELECT nota FROM devices").fetchone()
+        assert fila["nota"] == "migrado"
+        assert conn.execute("SELECT COUNT(*) AS n FROM device_history "
+                            "WHERE evento = 'migracion'").fetchone()["n"] == 1
+    finally:
+        conn.close()
+
+
+def test_migracion_mixta_que_falla_deshace_ddl_y_dml(tmp_path, monkeypatch):
+    conn = db.initialize(tmp_path / "mixta-rota.db")
+    try:
+        conn.execute(
+            "INSERT INTO devices(mac, ip_actual, first_seen, last_seen, "
+            "estado_confianza) VALUES('3c:22:fb:11:22:33','10.10.10.50',1,1,'confiable')")
+        version = db.SCHEMA_VERSION
+        pasos = _migracion_mixta(version + 1, (
+            "ALTER TABLE devices ADD COLUMN nota TEXT;\n"
+            "UPDATE devices SET nota = 'migrado';\n"
+            "INSERT INTO tabla_que_no_existe(x) VALUES(1);\n"
+        ))
+        monkeypatch.setattr(db, "MIGRATIONS", pasos)
+        monkeypatch.setattr(db, "SCHEMA_VERSION", version + 1)
+
+        with pytest.raises(sqlite3.Error):
+            db.migrate(conn)
+
+        assert db.user_version(conn) == version
+        columnas = {r["name"] for r in conn.execute("PRAGMA table_info(devices)")}
+        assert "nota" not in columnas
+        assert conn.execute("SELECT COUNT(*) AS n FROM device_history").fetchone()["n"] == 0
+    finally:
+        conn.close()

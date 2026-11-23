@@ -102,3 +102,45 @@ def test_worker_survives_probe_errors(cfg, monkeypatch):
         time.sleep(0.02)
     sensor.stop_event.set()
     assert len(llamadas) == 6        # el pool sigue vivo tras cada excepción
+
+
+def test_un_error_de_sqlite_no_escapa_de_la_verificacion(cfg, monkeypatch, caplog):
+    """F-02: una base ocupada no puede tumbar la verificación ni callarse el evento."""
+    import sqlite3
+
+    sensor = _sensor(cfg)
+
+    def bloqueada(*_args, **_kwargs):
+        raise sqlite3.OperationalError("database is locked")
+
+    monkeypatch.setattr("batrade.store.set_event_verified", bloqueada)
+    monkeypatch.setattr("batrade.sensor.probe_binding",
+                        lambda *_a, **_k: [GW_MAC])
+
+    with caplog.at_level("WARNING", logger="batrade.sensor"):
+        sensor._run_verification(4242, "10.10.10.50")   # no debe lanzar
+
+    texto = caplog.text
+    assert "4242" in texto
+    assert "database is locked" in texto
+
+
+def test_stop_deja_sin_hilos_de_verificacion(cfg, monkeypatch):
+    """F-03: con un pool real, stop() no deja hilos batrade-verify-* vivos."""
+    sensor = _sensor(cfg)
+    sensor.scan_queue = queue.Queue(maxsize=8)
+    sensor.conn = db.connect(cfg.paths.db)
+    sensor._closed = False
+    sensor.mode = "degraded"
+    sensor.notifier = type("NotifierFalso", (), {
+        "stop_event": threading.Event(), "sent": 0, "failed": 0})()
+
+    antes = {id(t) for t in threading.enumerate()}
+    sensor._ensure_verify_pool()
+    del_pool = [t for t in threading.enumerate()
+                if id(t) not in antes and t.name.startswith("batrade-verify")]
+    assert len(del_pool) == sensor_mod.VERIFY_WORKERS
+
+    sensor.stop()
+
+    assert [t for t in del_pool if t.is_alive()] == []

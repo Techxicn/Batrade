@@ -582,13 +582,39 @@ def live_summary(conn: sqlite3.Connection, since_ts: int) -> dict[str, Any]:
 
 
 def events_for_device(conn: sqlite3.Connection, device_id: int, limit: int = 50) -> list[sqlite3.Row]:
+    """Eventos que pertenecen a ese equipo, sin heredar los de una IP reutilizada.
+
+    Criterio: la MAC del origen manda siempre. Las coincidencias por IP sólo
+    cuentan dentro del periodo en que el equipo tuvo esa IP (``device_history``),
+    y ``ip_destino`` se acepta porque el equipo fue la víctima aunque la MAC del
+    origen sea la del atacante.
+    """
     device = get_device(conn, device_id)
     if device is None:
         return []
+    ip = device["ip_actual"]
+    mac = device["mac"]
+    desde_fila = conn.execute(
+        "SELECT MAX(ts) AS ts FROM device_history WHERE device_id = ? AND ip = ? "
+        "AND evento IN ('conexion', 'cambio_ip')",
+        (device_id, ip),
+    ).fetchone()
+    desde = desde_fila["ts"] if desde_fila is not None else None
+    hasta_fila = conn.execute(
+        "SELECT MIN(ts) AS ts FROM device_history WHERE ip = ? AND device_id != ? "
+        "AND evento IN ('conexion', 'cambio_ip') AND (? IS NULL OR ts > ?)",
+        (ip, device_id, desde, desde),
+    ).fetchone()
+    hasta = hasta_fila["ts"] if hasta_fila is not None else None
     return list(conn.execute(
-        "SELECT * FROM events WHERE (ip_origen = ? OR ip_destino = ? OR mac_origen = ?) "
-        "ORDER BY last_ts DESC LIMIT ?",
-        (device["ip_actual"], device["ip_actual"], device["mac"], limit),
+        "SELECT * FROM events WHERE mac_origen = :mac OR ("
+        "  (:desde IS NULL OR last_ts >= :desde)"
+        "  AND (:hasta IS NULL OR last_ts < :hasta)"
+        "  AND (ip_destino = :ip OR (ip_origen = :ip"
+        "       AND (mac_origen IS NULL OR mac_origen = :mac)))"
+        ") ORDER BY last_ts DESC LIMIT :limit",
+        {"mac": mac, "ip": ip, "desde": desde, "hasta": hasta,
+         "limit": max(1, int(limit))},
     ))
 
 
@@ -646,6 +672,14 @@ def recent_failed_scans(conn: sqlite3.Connection, limit: int = 5) -> list[sqlite
     ))
 
 
+def scan_xml_paths(conn: sqlite3.Connection) -> set[str]:
+    """Rutas XML que alguna fila de ``scans`` referencia (no son huérfanas)."""
+    filas = conn.execute(
+        "SELECT ruta_xml FROM scans WHERE ruta_xml IS NOT NULL"
+    )
+    return {str(fila["ruta_xml"]) for fila in filas if fila["ruta_xml"]}
+
+
 def purge(conn: sqlite3.Connection, before_ts: int) -> dict[str, Any]:
     """Retención: elimina datos y artefactos anteriores a ``before_ts`` (RNF-06).
 
@@ -700,10 +734,16 @@ RESET_TABLES_KEEP_DEVICES = (
 )
 
 
-def table_counts(conn: sqlite3.Connection) -> dict[str, int]:
-    """Filas por tabla de datos, para el resumen previo al reset."""
+def table_counts(conn: sqlite3.Connection,
+                 tables: Iterable[str] | None = None) -> dict[str, int]:
+    """Filas por tabla de datos, para el resumen previo al reset.
+
+    ``tables`` sólo admite nombres de la lista de mantenimiento: nada que venga
+    de fuera puede acabar dentro de un ``SELECT``.
+    """
+    nombres = _validar_tablas(RESET_TABLES_ALL if tables is None else tables)
     out: dict[str, int] = {}
-    for table in RESET_TABLES_ALL:
+    for table in nombres:
         try:
             row = conn.execute(f"SELECT COUNT(*) AS n FROM {table}").fetchone()
             out[table] = int(row["n"]) if row else 0
@@ -712,8 +752,19 @@ def table_counts(conn: sqlite3.Connection) -> dict[str, int]:
     return out
 
 
+def _validar_tablas(tables: Iterable[str]) -> tuple[str, ...]:
+    """Valida los nombres contra el conjunto permitido (defensa en profundidad)."""
+    permitidas = set(RESET_TABLES_ALL)
+    nombres = tuple(tables)
+    for nombre in nombres:
+        if nombre not in permitidas:
+            raise ValueError(f"tabla no permitida en mantenimiento: {nombre!r}")
+    return nombres
+
+
 def _reset_tables(conn: sqlite3.Connection, tables: tuple[str, ...]) -> dict[str, int]:
     """Vacía las tablas indicadas en una única transacción."""
+    tables = _validar_tablas(tables)
     counts: dict[str, int] = {}
     conn.execute("BEGIN IMMEDIATE")
     try:

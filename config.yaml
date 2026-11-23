@@ -25,6 +25,9 @@ sensor:
   presence_misses: 3
   heartbeat_interval: 15
   retention_days: 90
+  # Segundos sin ninguna observación en modo live antes de avisar (>= 60).
+  # El aviso es un evento informativo y un banner en /health, no una alerta.
+  capture_idle_warn_s: 600
   # Vigilancia de la tabla de vecinos vía netlink (no requiere CAP_NET_RAW).
   neighbor_watch: true
 
@@ -82,6 +85,10 @@ notify:
     # - { type: discord,  webhook_env: DISCORD_WEBHOOK }
   timeout_s: 8
   max_attempts: 8
+  # Rotación de var/alerts.log: tamaño máximo por archivo (>= 1 MB) y copias
+  # que se conservan (alerts.log.1, .2...; 0 = sin copias, se trunca).
+  local_max_mb: 10
+  local_backups: 3
 
 dashboard:
   host: 127.0.0.1

@@ -20,6 +20,7 @@ from defusedxml import ElementTree as DET
 from batrade.config import Config
 from batrade.net.caps import Capabilities
 from batrade.net.iputil import ip_in_cidr, now_ms, valid_ipv4
+from batrade.net.proc import env_minimo
 
 log = logging.getLogger("batrade.nmap")
 
@@ -174,7 +175,7 @@ def run_scan(cfg: Config, target: str, profile: str = "standard",
 
     try:
         proc = subprocess.run(argv, capture_output=True, text=True, timeout=limit,
-                              check=False)
+                              check=False, env=env_minimo())
         result.exit_code = proc.returncode
         stderr = proc.stderr.strip()
     except subprocess.TimeoutExpired:
@@ -226,7 +227,8 @@ def _run_udp_pass(cfg: Config, target: str, caps: Capabilities,
     _host_timeout, udp_proceso = udp_timeouts(cfg)
     try:
         proc = subprocess.run(argv, capture_output=True, text=True,
-                              timeout=udp_proceso, check=False)
+                              timeout=udp_proceso, check=False,
+                              env=env_minimo())
     except subprocess.TimeoutExpired:
         _safe_unlink(udp_path)
         result.notes.append(f"la pasada UDP excedió {udp_proceso}s")

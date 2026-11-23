@@ -151,3 +151,41 @@ def test_scan_request_coalescing(conn):
     assert len(claimed) == 1
     store.close_scan_request(conn, claimed[0]["id"], "hecho", 3000)
     assert store.create_scan_request(conn, "10.10.10.50", "quick", "test", 4000) is not None
+
+
+def test_events_for_device_no_mezcla_ips_reutilizadas(conn):
+    """F-06: un equipo nuevo con la IP de otro no hereda sus eventos."""
+    desde_a = store.upsert_device(conn, mac="3c:22:fb:11:22:33", ip="10.10.10.50",
+                                  ts=1000)["device_id"]
+    store.add_history(conn, desde_a, 1000, "conexion", ip="10.10.10.50")
+    # Un evento sin MAC del periodo de A: sólo lo puede reclamar el periodo A.
+    e1 = store.add_event(conn, ts=2000, tipo="port_scan", severidad="warn",
+                         clave_dedupe="f6-1", ip_origen="10.10.10.50",
+                         detalle={"resumen": "de A"})
+    e2 = store.add_event(conn, ts=2500, tipo="arp_spoof", severidad="crit",
+                         clave_dedupe="f6-2", ip_origen="10.10.10.50",
+                         mac_origen="3c:22:fb:11:22:33", detalle={"resumen": "de A"})
+    # A se va y B hereda la IP mucho después.
+    store.set_device_state(conn, desde_a, estado="confiable")
+    b = store.upsert_device(conn, mac="aa:bb:cc:00:11:22", ip="10.10.10.50",
+                            ts=5000)["device_id"]
+    store.add_history(conn, b, 5000, "conexion", ip="10.10.10.50")
+    e3 = store.add_event(conn, ts=6000, tipo="port_scan", severidad="warn",
+                         clave_dedupe="f6-3", ip_origen="10.10.10.50",
+                         detalle={"resumen": "de B"})
+    # El equipo fue víctima: ip_destino cuenta aunque la MAC sea del atacante.
+    e4 = store.add_event(conn, ts=7000, tipo="arp_spoof", severidad="crit",
+                         clave_dedupe="f6-4", ip_origen="10.10.10.66",
+                         mac_origen="de:ad:be:ef:00:01", ip_destino="10.10.10.50",
+                         detalle={"resumen": "B fue la víctima"})
+    conn.commit()
+
+    ids_a = {e["id"] for e in store.events_for_device(conn, int(desde_a))}
+    ids_b = {e["id"] for e in store.events_for_device(conn, int(b))}
+
+    assert e1["event_id"] in ids_a            # evento sin MAC del periodo de A
+    assert e1["event_id"] not in ids_b        # B llegó después: no lo hereda
+    assert e2["event_id"] in ids_a
+    assert e3["event_id"] in ids_b
+    assert e4["event_id"] in ids_b
+    assert e4["event_id"] not in ids_a        # B era el destino, no A

@@ -20,6 +20,7 @@ import requests
 from batrade import store
 from batrade.config import Config
 from batrade.net.iputil import now_ms
+from batrade.redact import redactar
 
 log = logging.getLogger("batrade.notify")
 
@@ -117,14 +118,19 @@ def send_telegram(channel: dict[str, Any], text: str, timeout: float,
     chat_id = env.get(channel.get("chat_id_env", "TELEGRAM_CHAT_ID"), "")
     if not token or not chat_id:
         raise NotificationError("Telegram sin TELEGRAM_TOKEN/TELEGRAM_CHAT_ID configurados")
-    resp = requests.post(
-        f"https://api.telegram.org/bot{token}/sendMessage",
-        json={"chat_id": chat_id, "text": text, "parse_mode": "HTML",
-              "disable_web_page_preview": True},
-        timeout=timeout,
-    )
+    try:
+        resp = requests.post(
+            f"https://api.telegram.org/bot{token}/sendMessage",
+            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML",
+                  "disable_web_page_preview": True},
+            timeout=timeout,
+        )
+    except requests.RequestException as exc:
+        # La excepción puede arrastrar la URL con el token: se sanea al origen.
+        raise NotificationError(redactar(str(exc))) from None
     if resp.status_code >= 300:
-        raise NotificationError(f"Telegram HTTP {resp.status_code}: {resp.text[:200]}")
+        # Sólo el código: el cuerpo de la respuesta no aporta y puede traer datos.
+        raise NotificationError(f"Telegram HTTP {resp.status_code}")
 
 
 def send_discord(channel: dict[str, Any], payload_text: str, timeout: float,
@@ -132,28 +138,58 @@ def send_discord(channel: dict[str, Any], payload_text: str, timeout: float,
     url = env.get(channel.get("webhook_env", "DISCORD_WEBHOOK"), "")
     if not url:
         raise NotificationError("Discord sin DISCORD_WEBHOOK configurado")
-    resp = requests.post(url, json=json.loads(payload_text), timeout=timeout)
+    try:
+        resp = requests.post(url, json=json.loads(payload_text), timeout=timeout)
+    except requests.RequestException as exc:
+        raise NotificationError(redactar(str(exc))) from None
     if resp.status_code >= 300:
-        raise NotificationError(f"Discord HTTP {resp.status_code}: {resp.text[:200]}")
+        raise NotificationError(f"Discord HTTP {resp.status_code}")
 
 
 class LocalSink:
-    """Escribe a archivo con permisos 600. Nunca falla por red."""
+    """Escribe a archivo con permisos 600 y rotación por tamaño.
 
-    def __init__(self, path: Path):
-        self.path = path
+    Sin rotación, `var/alerts.log` crecía hasta llenar el disco y un `OSError`
+    al escribir se llevaba por delante al notificador.
+    """
+
+    def __init__(self, path: Path, max_mb: int = 10, backups: int = 3):
+        self.path = Path(path)
+        self.max_bytes = max(1, int(max_mb)) * 1024 * 1024
+        self.backups = max(0, int(backups))
 
     def write(self, text: str) -> None:
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        new = not self.path.exists()
-        with self.path.open("a", encoding="utf-8") as fh:
-            fh.write(f"----- {datetime.now().isoformat(timespec='seconds')} -----\n")
-            fh.write(text + "\n")
-        if new:
-            try:
+        try:
+            self.path.parent.mkdir(parents=True, exist_ok=True)
+            self._rotar_si_toca()
+            nuevo = not self.path.exists()
+            with self.path.open("a", encoding="utf-8") as fh:
+                fh.write(f"----- {datetime.now().isoformat(timespec='seconds')} -----\n")
+                fh.write(redactar(text) + "\n")
+            if nuevo:
                 self.path.chmod(0o600)
-            except OSError:
-                pass
+        except OSError as exc:
+            # Un disco lleno no puede tumbar la cola de notificaciones.
+            log.warning("no se pudo escribir %s: %s", self.path.name, exc)
+
+    def _rotar_si_toca(self) -> None:
+        if not self.path.exists() or self.path.stat().st_size < self.max_bytes:
+            return
+        if self.backups <= 0:
+            self.path.unlink(missing_ok=True)
+            return
+        for i in range(self.backups - 1, 0, -1):
+            origen = self.path.with_name(f"{self.path.name}.{i}")
+            if origen.exists():
+                origen.replace(self.path.with_name(f"{self.path.name}.{i + 1}"))
+        self.path.replace(self.path.with_name(f"{self.path.name}.1"))
+        for i in range(1, self.backups + 1):
+            copia = self.path.with_name(f"{self.path.name}.{i}")
+            if copia.exists():
+                try:
+                    copia.chmod(0o600)
+                except OSError:
+                    pass
 
 
 def backoff_seconds(attempts: int) -> int:
@@ -172,7 +208,8 @@ class Notifier:
         self.conn_factory = conn_factory
         self.env = env or {}
         self.sender = sender
-        self.sink = LocalSink(cfg.paths.alerts_log)
+        self.sink = LocalSink(cfg.paths.alerts_log, cfg.notify.local_max_mb,
+                              cfg.notify.local_backups)
         self.stop_event = threading.Event()
         self.sent = 0
         self.failed = 0
@@ -221,12 +258,15 @@ class Notifier:
             attempts = int(row["intentos"])
             agotado = attempts + 1 >= self.cfg.notify.max_attempts
             delay = backoff_seconds(attempts) * 1000
-            store.notification_failed(conn, int(row["id"]), str(exc),
+            # Nunca se guarda ni se registra el texto crudo: puede traer la URL
+            # del webhook o el token del bot.
+            error = redactar(str(exc))
+            store.notification_failed(conn, int(row["id"]), error,
                                       None if agotado else ts + delay, agotado)
             self.failed += 1
             log.warning("notificación fallida", extra={"fields": {
                 "canal": channel_type, "evento": row["event_id"], "intento": attempts + 1,
-                "error": str(exc)[:200]}})
+                "error": error[:200]}})
             return False
         store.notification_sent(conn, int(row["id"]), int(row["event_id"]), ts)
         self.sent += 1

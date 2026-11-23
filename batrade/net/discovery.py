@@ -15,6 +15,7 @@ from batrade.config import Config
 from batrade.net import caps as caps_mod
 from batrade.net.neigh import probe_cidr, read_neighbors
 from batrade.net.iputil import ip_in_cidr, normalize_mac, valid_ipv4
+from batrade.net.proc import env_minimo
 
 log = logging.getLogger("batrade.discovery")
 
@@ -78,7 +79,8 @@ class Discovery:
         ]
         try:
             proc = subprocess.run(argv, capture_output=True, text=True,
-                                  timeout=max(15, self.cfg.sensor.sweep_interval))
+                                  timeout=max(15, self.cfg.sensor.sweep_interval),
+                                  env=env_minimo())
         except subprocess.TimeoutExpired as exc:
             raise DiscoveryError(f"timeout tras {exc.timeout}s") from exc
         except OSError as exc:

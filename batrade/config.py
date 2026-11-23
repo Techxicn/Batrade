@@ -47,6 +47,8 @@ class SensorCfg:
     heartbeat_interval: int = 15
     retention_days: int = 90
     neighbor_watch: bool = True
+    # Segundos sin ninguna observación en modo live antes de avisar en /health.
+    capture_idle_warn_s: int = 600
 
 
 @dataclass(frozen=True, slots=True)
@@ -91,6 +93,10 @@ class NotifyCfg:
     channels: list[dict[str, Any]] = field(default_factory=lambda: [{"type": "local"}])
     timeout_s: float = 8.0
     max_attempts: int = 8
+    # Rotación de var/alerts.log: tamaño máximo por archivo y copias que se
+    # conservan (alerts.log.1, .2, ...). Sin tope, el archivo llenaba el disco.
+    local_max_mb: int = 10
+    local_backups: int = 3
 
 
 @dataclass(slots=True)
@@ -195,6 +201,9 @@ def _parse_risky(raw: Any, errors: list[str]) -> dict[tuple[str, int], RiskyPort
             continue
         if proto not in ("tcp", "udp"):
             errors.append(f"scan.risky_ports: protocolo inválido {proto!r} en puerto {port}")
+            continue
+        if (proto, port) in out:
+            errors.append(f"scan.risky_ports: {proto}/{port} está duplicado")
             continue
         out[(proto, port)] = RiskyPort(
             port=port,
@@ -354,6 +363,7 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
         heartbeat_interval=int(_get(sen_raw, "heartbeat_interval", 15)),
         retention_days=int(_get(sen_raw, "retention_days", 90)),
         neighbor_watch=bool(_get(sen_raw, "neighbor_watch", True)),
+        capture_idle_warn_s=int(_get(sen_raw, "capture_idle_warn_s", 600)),
     )
     detect = DetectCfg(
         window_s=int(_get(det_raw, "window_s", 10)),
@@ -382,6 +392,8 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
         channels=list(not_raw.get("channels") or [{"type": "local"}]),
         timeout_s=float(_get(not_raw, "timeout_s", 8)),
         max_attempts=max(1, int(_get(not_raw, "max_attempts", 8))),
+        local_max_mb=int(_get(not_raw, "local_max_mb", 10)),
+        local_backups=int(_get(not_raw, "local_backups", 3)),
     )
     token_env = str(_get(dash_raw, "auth_token_env", "DASHBOARD_TOKEN"))
     dashboard = DashboardCfg(
@@ -440,6 +452,10 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
         errors.append("sensor.presence_misses debe ser >= 1")
     if sensor.heartbeat_interval < 5:
         errors.append("sensor.heartbeat_interval debe ser >= 5")
+    if sensor.capture_idle_warn_s < 60:
+        errors.append(
+            f"sensor.capture_idle_warn_s debe ser >= 60: {sensor.capture_idle_warn_s}"
+        )
     if sensor.retention_days < 1:
         errors.append("sensor.retention_days debe ser >= 1")
     if not 2 <= detect.window_s <= 600:
@@ -462,6 +478,11 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
         errors.append(f"scan.quick_periodic_hours debe ser >= 1: {scan.quick_periodic_hours}")
     if scan.weekly_rescan_days < 1:
         errors.append(f"scan.weekly_rescan_days debe ser >= 1: {scan.weekly_rescan_days}")
+    # Un timeout absurdo bloquea un worker de escaneo durante horas.
+    for nombre in ("standard_timeout", "quick_timeout", "udp_timeout"):
+        valor = getattr(scan, nombre)
+        if valor > 3600:
+            errors.append(f"scan.{nombre} no puede superar 3600 s: {valor}")
     if not 1 <= dashboard.port <= 65535:
         errors.append(f"dashboard.port inválido: {dashboard.port}")
     if not 1 <= dashboard.live_poll_s <= 60:
@@ -476,6 +497,10 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
         )
     if not 0.5 <= notify.timeout_s <= 60:
         errors.append(f"notify.timeout_s fuera de rango 0.5..60: {notify.timeout_s}")
+    if notify.local_max_mb < 1:
+        errors.append(f"notify.local_max_mb debe ser >= 1: {notify.local_max_mb}")
+    if notify.local_backups < 0:
+        errors.append(f"notify.local_backups debe ser >= 0: {notify.local_backups}")
     valid_channels = {"local", "telegram", "discord"}
     for ch in notify.channels:
         if not isinstance(ch, dict) or ch.get("type") not in valid_channels:

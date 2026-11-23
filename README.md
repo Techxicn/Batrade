@@ -163,6 +163,10 @@ Selection order:
 
 `cidr: auto` derives a normalized CIDR (for example `192.168.0.0/24`) from the chosen interface. `gateway_ip: null` adopts the default route only when it belongs to the monitored subnet; otherwise the gateway stays unset and the dashboard says so.
 
+**`dhcp_server_ip` from the config always wins.** When it is set, the DHCP rule compares every `DHCPOFFER` against that address and a different server is an immediate `crit`. Left empty, the sensor *learns* the first DHCP server it sees: convenient on day one, and blind to a rogue server that answers before the real one. `doctor` warns while the server is being learned and suggests pinning it in `config.yaml`.
+
+Pin `gateway_ip` for the same reason. With `null` the sensor adopts the default route at every start; that is right for a laptop that moves between networks, but a fixed gateway is what turns *the gateway changed its MAC* into an immediate `crit` instead of a quiet re-learning. `gateway_ip` from the config (or from the stored baseline) wins over the route.
+
 List the interfaces with their kind, address, MAC and whether they carry the default route:
 
 ```bash
@@ -272,6 +276,27 @@ sudo batrade reset-db --no-backup      # skip the safety copy
 - **Artifacts.** Scan XML under `paths.scans_dir` and `var/alerts.log` are cleared too (path containment enforced; symlinks and files outside the directory are ignored).
 - **Audit.** The operation is logged in `var/log/batrade.log` with scope, row counts and the invoking user (`SUDO_USER`), never inventory contents.
 
+### Restoring a backup
+
+There are two kinds of backup, both next to the database and both mode `600`:
+
+- `<db>.bak-v<N>` — written automatically before a migration.
+- `<db>.bak-reset-<epoch_ms>` — written by `reset-db` unless you passed `--no-backup`.
+
+To go back, stop the writer and swap the file (SQLite must not be open):
+
+```bash
+sudo batrade stop
+cd var
+mv batrade.db batrade.db.roto              # keep the bad one, don't delete it
+cp batrade.db.bak-reset-1730000000000 batrade.db
+sudo batrade doctor                       # schema version and row counts
+```
+
+If the backup is older than the code, the next start applies the pending migrations
+(and writes a new `.bak-v<N>` first). A `-2`, `-3`… suffix means an earlier copy with the
+same tag already existed; sorted by name, the highest suffix is the newest.
+
 Exit codes: `0` done, `1` refused or cancelled, `2` invalid arguments or configuration. The reset is **never** exposed in the dashboard and never runs automatically.
 
 ## CLI reference
@@ -372,6 +397,15 @@ one `GET` every few seconds.
 
 ## Production deployment (systemd)
 
+**The dashboard is a Flask development server on purpose.** Both `batrade dashboard` and the unit listen on `127.0.0.1` and are meant for one operator on the same machine: there is no WSGI/HTTPS layer to maintain. To reach it from another machine, forward the port over SSH — the tunnel keeps `localhost`, so the panel counts as a secure context and browser notifications keep working:
+
+```bash
+ssh -L 8000:127.0.0.1:8000 user@sensor-host
+# then open http://localhost:8000 on your own machine
+```
+
+Do not expose port 8000 directly. If you ever put a reverse proxy in front, terminate TLS there and set `DASHBOARD_TOKEN` in `.env` (the panel refuses to start beyond loopback without a token).
+
 The `deploy/` directory contains two unit files:
 
 - `batrade-sensor.service` — runs the sensor with `CAP_NET_RAW` and `CAP_NET_ADMIN`
@@ -449,7 +483,7 @@ pip install -e ".[dev]"    # pytest; on distribution-managed systems use a venv
 python3 -m pytest
 ```
 
-Tests cover the detection engine, rules, inventory, notification queue, store, dashboard routes, the live-panel JSON endpoint and its cursor, configuration, interface auto-detection, migrations, scan scheduling and close policy, target failures (timeout and truncated XML), `scan.exclude`, UDP parsing, ARP verification, retention, `reset-db`, the installer and project metadata. They run entirely offline and without privileges, using synthetic observations and the fixtures in `fixtures/pcaps/` and `fixtures/nmap/`. CI runs the suite on Python 3.11, 3.12 and 3.13 (`.github/workflows/tests.yml`).
+Tests cover the detection engine, rules, inventory, notification queue, store, dashboard routes (including write hardening and 503 on a busy database), the live-panel JSON endpoint and its cursor, secret redaction, configuration limits, file permissions, log rotation, interface auto-detection, migrations (with mixed DDL+DML), scan scheduling and close policy, target failures (timeout and truncated XML), `scan.exclude`, orphan XML cleanup, UDP parsing, ARP verification and thread supervision, retention, `reset-db`, the installer and project metadata. They run entirely offline and without privileges, using synthetic observations and the fixtures in `fixtures/pcaps/` and `fixtures/nmap/`. CI runs the suite on Python 3.11, 3.12 and 3.13 (`.github/workflows/tests.yml`).
 
 ## Project layout
 

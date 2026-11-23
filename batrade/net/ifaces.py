@@ -22,6 +22,7 @@ from pathlib import Path
 
 from batrade.net.iputil import (interface_ipv4, is_multicast_mac, normalize_mac,
                                 rfc1918, valid_ipv4)
+from batrade.net.proc import env_minimo
 
 log = logging.getLogger("batrade.ifaces")
 
@@ -93,7 +94,7 @@ def _run(argv: list[str], timeout: float = 5.0) -> str | None:
     try:
         proc = subprocess.run(
             argv, capture_output=True, text=True, timeout=timeout, check=False,
-            env={**os.environ, "LC_ALL": "C"},
+            env=env_minimo(),
         )
     except (OSError, subprocess.SubprocessError):
         return None

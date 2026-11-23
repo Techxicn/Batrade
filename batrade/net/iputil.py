@@ -8,6 +8,8 @@ import subprocess
 import time
 from collections.abc import Iterable
 
+from batrade.net.proc import env_minimo
+
 MAC_RE = re.compile(r"^[0-9a-f]{2}(:[0-9a-f]{2}){5}$")
 
 # Bit 0x02 del primer octeto: "locally administered".
@@ -100,6 +102,7 @@ def default_gateway() -> str | None:
         out = subprocess.run(
             ["ip", "-4", "route", "show", "default"],
             capture_output=True, text=True, timeout=5, check=False,
+            env=env_minimo(),
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return None
@@ -116,6 +119,7 @@ def interface_ipv4(iface: str) -> str | None:
         out = subprocess.run(
             ["ip", "-4", "-o", "addr", "show", "dev", iface],
             capture_output=True, text=True, timeout=5, check=False,
+            env=env_minimo(),
         ).stdout
     except (OSError, subprocess.SubprocessError):
         return None
