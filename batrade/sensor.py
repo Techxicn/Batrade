@@ -30,10 +30,11 @@ from batrade.detect.state import Baseline
 from batrade.inventory import Inventory, status as baseline_status
 from batrade.net import caps as caps_mod
 from batrade.net.discovery import Discovery, DiscoveryError
-from batrade.net.iputil import (default_gateway, interface_ipv4, ip_in_cidr,
-                                normalize_mac, now_ms)
+from batrade.net.iputil import (default_gateway, interface_ipv4, ip_excluded,
+                                ip_in_cidr, normalize_mac, now_ms)
 from batrade.net.neigh import NeighborWatcher
-from batrade.net.nmap_scan import ScanError, run_scan, udp_risky_ports
+from batrade.net.nmap_scan import (ScanError, TargetScanError, run_scan,
+                                   udp_risky_ports)
 from batrade.net.oui import OuiDB
 from batrade.net.verify import (ESTADO_CONFIRMADO, ESTADO_DESCARTADO,
                                 ESTADO_NO_VERIFICABLE, estado_verificacion,
@@ -359,6 +360,8 @@ class Sensor:
         for ip in hosts:
             if ip == self.sensor_ip:
                 continue
+            if ip_excluded(ip, self.cfg.scan.exclude):
+                continue
             device = store.get_device_by_ip(conn, ip)
             if device is None:
                 continue
@@ -371,6 +374,13 @@ class Sensor:
             if device["estado_confianza"] == "confiable":
                 last_standard = store.last_scan_ts(conn, device_id, "standard")
                 if last_standard is None or ts - last_standard > weekly_ms:
+                    # Un intento reciente sin resultado (timeout o XML a medias)
+                    # ya cuenta como backoff del objetivo: un equipo que no
+                    # responde no puede reescanearse en cada barrido.
+                    intento = store.last_scan_ts(conn, device_id, "standard",
+                                                 only_ok=False)
+                    if intento is not None and ts - intento <= quick_ms:
+                        continue
                     atrasados.append((last_standard or 0, ip, device_id))
                     continue
             if ts - int(last) > quick_ms:
@@ -478,6 +488,16 @@ class Sensor:
             log.info(udp_note)
         try:
             result = run_scan(self.cfg, job.ip, job.profile, self.caps)
+        except TargetScanError as exc:
+            # Fallo del objetivo (timeout o XML incompleto): nmap no está roto.
+            # No toca tool_status; queda en `scans` con estado error y eso es lo
+            # que frena el reintento inmediato de este equipo.
+            error = f"{exc.motivo}: {exc.mensaje}"
+            store.finish_scan(conn, scan_id, ts=now_ms(), estado="error", error=error)
+            if job.request_id:
+                store.close_scan_request(conn, job.request_id, "error", now_ms(), error)
+            log.warning("escaneo de %s sin resultado (%s): %s", job.ip, exc.motivo, exc)
+            return
         except ScanError as exc:
             failures = store.record_tool_status(conn, "nmap", now_ms(), False, error=str(exc))
             store.finish_scan(conn, scan_id, ts=now_ms(), estado="error", error=str(exc))

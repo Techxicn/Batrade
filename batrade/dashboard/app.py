@@ -29,7 +29,7 @@ from batrade import db, store
 from batrade.inventory import approve_baseline, review_candidates
 from batrade.inventory import status as baseline_status
 from batrade.net import caps as caps_mod
-from batrade.net.iputil import ip_in_cidr, now_ms, valid_ipv4
+from batrade.net.iputil import ip_excluded, ip_in_cidr, now_ms, valid_ipv4
 from batrade.net.nmap_scan import udp_risky_ports
 
 if TYPE_CHECKING:  # sólo para anotaciones: `from __future__ import annotations`
@@ -434,6 +434,9 @@ def create_app(cfg: Config) -> Flask:
         if not objetivo or not ip_in_cidr(objetivo, cfg.network.cidr):
             flash(f"Objetivo inválido o fuera de {cfg.network.cidr}", "error")
             return redirect(back)
+        if ip_excluded(objetivo, cfg.scan.exclude):
+            flash(f"{objetivo} está excluido en scan.exclude", "warn")
+            return redirect(back)
         if perfil not in ("quick", "standard", "vuln"):
             flash("Perfil inválido", "error")
             return redirect(back)
@@ -462,6 +465,7 @@ def create_app(cfg: Config) -> Flask:
                                caps_summary=caps.summary(), mode_notes=mode_notes,
                                udp_note=udp_note,
                                tools=tools, heartbeat=hb, db_size=size,
+                               failed_scans=store.recent_failed_scans(conn),
                                requests=list(conn.execute(
                                    "SELECT * FROM scan_requests ORDER BY id DESC LIMIT 20")),
                                effective_mode=mode)

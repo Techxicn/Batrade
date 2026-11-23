@@ -42,6 +42,9 @@ scan:
   quick_periodic_hours: 24
   # Reescaneo semanal de equipos confiables (RF-10).
   weekly_rescan_days: 7
+  # Objetivos que no se escanean nunca: IPs sueltas o redes CIDR. Para equipos
+  # que no responden (el escaneo sólo dejaría XML a medias en cada intento).
+  exclude: []
   # Catálogo editable de puertos riesgosos (RF-08).
   # El protocolo es obligatorio: UPnP/SSDP es UDP y un escaneo TCP nunca lo verá.
   risky_ports:

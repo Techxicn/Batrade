@@ -213,9 +213,12 @@ Wi-Fi works for discovery and netlink monitoring, but a managed-mode card cannot
 | `udp_timeout` | `60` | `--host-timeout` of the UDP pass (minimum 5); the nmap process gets this plus 30 s |
 | `quick_periodic_hours` | `24` | A device whose last scan is older than this gets a `quick` rescan |
 | `weekly_rescan_days` | `7` | Trusted (`confiable`) devices get a new `standard` scan after this many days (RF-10) |
+| `exclude` | `[]` | Targets never scanned: bare IPv4 addresses or CIDR networks |
 | `risky_ports` | 10-port catalogue | `{port, protocol, service, reason}`; `protocol` is mandatory |
 
 Scheduling happens after each sweep: a device seen for the first time gets a `standard` scan; an overdue trusted device gets a new `standard`; anything else overdue gets a `quick`. Weekly rescans are staggered — at most `max_concurrent` per sweep, oldest first — so a network that was offline for a week does not fire a burst of nmap processes. In-flight jobs are coalesced by `(address, profile)`, and the same pair requested from the dashboard cannot be queued twice.
+
+**When a target does not answer.** A scan that ends in timeout, or whose XML comes back truncated or empty (nmap was killed mid-run), is a *target* failure, not a broken tool: it does not touch `tool_status.fallos_consecutivos`, the partial XML is deleted immediately, and the attempt is recorded in `scans` as `error`. That record is what backs off the target: a trusted device whose `standard` scan just failed is not rescanned on every sweep, only after `quick_periodic_hours`. `/health` shows the latest failures with a sentence saying what happened and what to do — if the host will never answer, list it under `scan.exclude` and it stops being scanned, both automatically and from the dashboard.
 
 **UDP pass.** The catalogue's UDP ports are scanned with a second, tightly bounded nmap invocation (`-sU -sV --version-light -p U:<catalogue> --host-timeout <scan.udp_timeout>s --max-retries 1`) only when the sensor has `CAP_NET_RAW`. Version detection is what turns an `open|filtered` into `open` when the service answers the probe; only ports reported `open` are stored, because `open|filtered` is the normal outcome for UDP without a reply and would produce false positives. Without raw capture the pass is skipped, the sensor logs the limitation once per scan, and `/health` shows *"UDP no verificable sin CAP_NET_RAW"*. A protocol that was not scanned never marks its known ports as closed.
 
@@ -446,7 +449,7 @@ pip install -e ".[dev]"    # pytest; on distribution-managed systems use a venv
 python3 -m pytest
 ```
 
-Tests cover the detection engine, rules, inventory, notification queue, store, dashboard routes, the live-panel JSON endpoint and its cursor, configuration, interface auto-detection, migrations, scan scheduling and close policy, UDP parsing, ARP verification, retention, `reset-db`, the installer and project metadata. They run entirely offline and without privileges, using synthetic observations and the fixtures in `fixtures/pcaps/` and `fixtures/nmap/`. CI runs the suite on Python 3.11, 3.12 and 3.13 (`.github/workflows/tests.yml`).
+Tests cover the detection engine, rules, inventory, notification queue, store, dashboard routes, the live-panel JSON endpoint and its cursor, configuration, interface auto-detection, migrations, scan scheduling and close policy, target failures (timeout and truncated XML), `scan.exclude`, UDP parsing, ARP verification, retention, `reset-db`, the installer and project metadata. They run entirely offline and without privileges, using synthetic observations and the fixtures in `fixtures/pcaps/` and `fixtures/nmap/`. CI runs the suite on Python 3.11, 3.12 and 3.13 (`.github/workflows/tests.yml`).
 
 ## Project layout
 
