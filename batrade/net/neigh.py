@@ -9,7 +9,7 @@ from __future__ import annotations
 import errno
 import ipaddress
 import logging
-import select
+import selectors
 import socket
 import struct
 import subprocess
@@ -75,6 +75,10 @@ def probe_cidr(cidr: str, *, port: int = 9, timeout: float = 0.35,
     Un connect TCP no privilegiado obliga al kernel a resolver el vecino antes
     de enviar el SYN. Aunque el puerto esté cerrado, un host vivo aparece en la
     tabla de vecinos. Devuelve cuántos sockets llegaron a conectar.
+
+    Usa ``selectors`` (epoll) en vez de ``select.select``: aquel revienta con
+    más de ``FD_SETSIZE`` descriptores. El cierre va en ``finally`` para que un
+    fallo del selector no deje sockets abiertos.
     """
     try:
         net = ipaddress.IPv4Network(cidr, strict=False)
@@ -82,32 +86,46 @@ def probe_cidr(cidr: str, *, port: int = 9, timeout: float = 0.35,
         return 0
     targets = [str(h) for h in net.hosts()
                if h != ipaddress.IPv4Address("255.255.255.255")]
+    lote = max(1, min(int(concurrency), 1024))
     connected = 0
-    for start in range(0, len(targets), concurrency):
-        batch = targets[start:start + concurrency]
+    for start in range(0, len(targets), lote):
+        batch = targets[start:start + lote]
         socks: list[socket.socket] = []
-        for ip in batch:
-            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            sock.setblocking(False)
-            try:
-                sock.connect((ip, port))
-            except BlockingIOError:
-                socks.append(sock)
-            except OSError:
-                sock.close()
-                continue
-        if socks:
-            _, writable, errored = select.select([], socks, socks, timeout)
-            connected += len(writable)
-            for sock in errored:
+        try:
+            for ip in batch:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                sock.setblocking(False)
                 try:
-                    if sock.getsockopt(socket.SOL_SOCKET, socket.SO_ERROR) != errno.ECONNREFUSED:
-                        continue
-                    connected += 1
+                    sock.connect((ip, port))
+                except BlockingIOError:
+                    socks.append(sock)
+                except OSError:
+                    sock.close()
+                    continue
+            if socks:
+                with selectors.DefaultSelector() as selector:
+                    for sock in socks:
+                        selector.register(sock, selectors.EVENT_WRITE)
+                    for clave, _eventos in selector.select(timeout):
+                        sock = clave.fileobj
+                        try:
+                            error = sock.getsockopt(socket.SOL_SOCKET,
+                                                    socket.SO_ERROR)
+                        except OSError:
+                            continue
+                        # 0 = conectado; ECONNREFUSED = host vivo con el puerto
+                        # cerrado. El resto (sin ruta, inalcanzable) no cuenta.
+                        if error in (0, errno.ECONNREFUSED):
+                            connected += 1
+        except (OSError, ValueError):
+            # Un fallo del selector no puede tumbar el barrido; se cierra abajo.
+            pass
+        finally:
+            for sock in socks:
+                try:
+                    sock.close()
                 except OSError:
                     pass
-        for sock in socks:
-            sock.close()
     return connected
 
 
