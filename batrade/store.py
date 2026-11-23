@@ -582,13 +582,39 @@ def live_summary(conn: sqlite3.Connection, since_ts: int) -> dict[str, Any]:
 
 
 def events_for_device(conn: sqlite3.Connection, device_id: int, limit: int = 50) -> list[sqlite3.Row]:
+    """Eventos que pertenecen a ese equipo, sin heredar los de una IP reutilizada.
+
+    Criterio: la MAC del origen manda siempre. Las coincidencias por IP sólo
+    cuentan dentro del periodo en que el equipo tuvo esa IP (``device_history``),
+    y ``ip_destino`` se acepta porque el equipo fue la víctima aunque la MAC del
+    origen sea la del atacante.
+    """
     device = get_device(conn, device_id)
     if device is None:
         return []
+    ip = device["ip_actual"]
+    mac = device["mac"]
+    desde_fila = conn.execute(
+        "SELECT MAX(ts) AS ts FROM device_history WHERE device_id = ? AND ip = ? "
+        "AND evento IN ('conexion', 'cambio_ip')",
+        (device_id, ip),
+    ).fetchone()
+    desde = desde_fila["ts"] if desde_fila is not None else None
+    hasta_fila = conn.execute(
+        "SELECT MIN(ts) AS ts FROM device_history WHERE ip = ? AND device_id != ? "
+        "AND evento IN ('conexion', 'cambio_ip') AND (? IS NULL OR ts > ?)",
+        (ip, device_id, desde, desde),
+    ).fetchone()
+    hasta = hasta_fila["ts"] if hasta_fila is not None else None
     return list(conn.execute(
-        "SELECT * FROM events WHERE (ip_origen = ? OR ip_destino = ? OR mac_origen = ?) "
-        "ORDER BY last_ts DESC LIMIT ?",
-        (device["ip_actual"], device["ip_actual"], device["mac"], limit),
+        "SELECT * FROM events WHERE mac_origen = :mac OR ("
+        "  (:desde IS NULL OR last_ts >= :desde)"
+        "  AND (:hasta IS NULL OR last_ts < :hasta)"
+        "  AND (ip_destino = :ip OR (ip_origen = :ip"
+        "       AND (mac_origen IS NULL OR mac_origen = :mac)))"
+        ") ORDER BY last_ts DESC LIMIT :limit",
+        {"mac": mac, "ip": ip, "desde": desde, "hasta": hasta,
+         "limit": max(1, int(limit))},
     ))
 
 
