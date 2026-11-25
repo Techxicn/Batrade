@@ -22,6 +22,7 @@ import sqlite3
 from datetime import datetime
 from functools import wraps
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlsplit
 
 from flask import (Flask, Response, abort, flash, g, redirect, render_template,
                    request, session, url_for)
@@ -44,7 +45,7 @@ SEV_ICON = {"info": "·", "warn": "!", "crit": "!!"}
 
 
 def _human_age(ms: int | None) -> str:
-    if not ms:
+    if ms is None:
         return "nunca"
     delta = max(0, now_ms() - int(ms))
     sec = delta // 1000
@@ -90,6 +91,7 @@ def verification_label(raw) -> dict | None:
 # Panel en vivo: serialización de la única ruta JSON (GET /api/live)
 # --------------------------------------------------------------------------- #
 LIVE_TEXT_MAX = 300
+DEVICES_LIMIT = 500
 _CONTROL_CHARS = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
@@ -146,6 +148,35 @@ def _live_event(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def _safe_redirect(target: str | None, fallback: str, *,
+                   allow_same_origin: bool = False) -> str:
+    """Valida que una redirección permanezca dentro del propio panel.
+
+    Rechaza esquemas externos, URLs de protocolo relativo (``//host``), barras
+    invertidas (``/\\host``) y caracteres de control. Con
+    ``allow_same_origin=True`` (p. ej. ``Referer``) admite una URL absoluta del
+    mismo ``request.host`` y devuelve sólo su ruta y query relativos.
+    """
+    if not target:
+        return fallback
+    raw = str(target).strip()
+    if (not raw or "\\" in raw or raw.startswith("//")
+            or any(ord(c) < 0x20 or ord(c) == 0x7F for c in raw)):
+        return fallback
+    parts = urlsplit(raw)
+    if parts.scheme or parts.netloc:
+        if not (allow_same_origin and parts.scheme in ("http", "https")
+                and parts.netloc == request.host):
+            return fallback
+        path = parts.path or "/"
+        if not path.startswith("/") or path.startswith("//"):
+            return fallback
+        return f"{path}?{parts.query}" if parts.query else path
+    if not parts.path.startswith("/") or parts.path.startswith("//"):
+        return fallback
+    return f"{parts.path}?{parts.query}" if parts.query else parts.path
+
+
 def _json_response(payload: dict[str, Any], status: int = 200) -> Response:
     """JSON sin caché y con ``<``/``>``/``&`` escapados (defensa en profundidad)."""
     body = json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
@@ -157,6 +188,7 @@ def _json_response(payload: dict[str, Any], status: int = 200) -> Response:
 
 
 def create_app(cfg: Config) -> Flask:
+    cfg.ensure_dirs()
     db.initialize(cfg.paths.db)
     caps = caps_mod.probe()
     mode, mode_notes = caps_mod.resolve_mode(cfg.sensor.mode, caps)
@@ -214,9 +246,9 @@ def create_app(cfg: Config) -> Flask:
         if "csrf" not in session:
             session["csrf"] = secrets.token_urlsafe(18)
         endpoint = request.endpoint or ""
-        if endpoint in ("static", "login"):
+        if endpoint == "static":
             return None
-        if cfg.dashboard.auth_token and not session.get("auth"):
+        if endpoint != "login" and cfg.dashboard.auth_token and not session.get("auth"):
             if endpoint == "api_live":
                 # Un GET de datos no puede acabar en el HTML del login: 401 JSON.
                 return _json_response({"error": "sesión requerida"}, 401)
@@ -244,13 +276,13 @@ def create_app(cfg: Config) -> Flask:
 
     @app.template_filter("ts")
     def _fmt_ts(ms):  # noqa: ANN001
-        if not ms:
+        if ms is None or ms == "":
             return "—"
         return datetime.fromtimestamp(int(ms) / 1000).strftime("%d/%m/%Y %H:%M:%S")
 
     @app.template_filter("ago")
     def _fmt_ago(ms):  # noqa: ANN001
-        return _human_age(int(ms) if ms else None)
+        return _human_age(None if ms is None or ms == "" else int(ms))
 
     @app.template_filter("mac")
     def _fmt_mac(mac):  # noqa: ANN001
@@ -276,7 +308,7 @@ def create_app(cfg: Config) -> Flask:
             token = request.form.get("token", "")
             if hmac.compare_digest(token, cfg.dashboard.auth_token):
                 session["auth"] = True
-                return redirect(request.args.get("next") or url_for("index"))
+                return redirect(_safe_redirect(request.args.get("next"), url_for("index")))
             flash("Token incorrecto", "error")
         return render_template("login.html")
 
@@ -304,10 +336,15 @@ def create_app(cfg: Config) -> Flask:
         estado = request.args.get("estado") or None
         search = request.args.get("q") or None
         only_online = request.args.get("online") == "1"
+        limite = max(1, int(DEVICES_LIMIT))
         rows = store.list_devices(conn, estado=estado, search=search,
-                                  only_online=only_online)
+                                  only_online=only_online, limit=limite + 1)
+        truncated = len(rows) > limite
+        if truncated:
+            rows = rows[:limite]
         counts = store.count_devices(conn)
         return render_template("devices.html", devices=rows, counts=counts,
+                               truncated=truncated, limit=limite,
                                filtro={"estado": estado or "", "q": search or "",
                                        "online": only_online})
 
@@ -324,9 +361,7 @@ def create_app(cfg: Config) -> Flask:
             history=store.list_history(conn, device_id),
             events=store.events_for_device(conn, device_id),
             is_gateway=(device["ip_actual"] == gateway_ip),
-            scans=list(conn.execute(
-                "SELECT * FROM scans WHERE device_id = ? ORDER BY id DESC LIMIT 10",
-                (device_id,))),
+            scans=store.list_scans_for_device(conn, device_id, limit=10),
             profiles=("quick", "standard", "vuln"),
         )
 
@@ -355,8 +390,7 @@ def create_app(cfg: Config) -> Flask:
         severidad = request.args.get("severidad") or None
         tipo = request.args.get("tipo") or None
         rows = store.list_events(conn, severidad=severidad, tipo=tipo, limit=300)
-        tipos = [r["tipo"] for r in conn.execute(
-            "SELECT DISTINCT tipo FROM events ORDER BY tipo")]
+        tipos = store.list_event_types(conn)
         return render_template("events.html", events=rows, tipos=tipos,
                                filtro={"severidad": severidad or "", "tipo": tipo or ""})
 
@@ -370,7 +404,8 @@ def create_app(cfg: Config) -> Flask:
             # Entrada inválida: 400 y nada escrito (antes se aceptaba en silencio).
             abort(400, description="Disposición inválida")
         flash("Disposición registrada (alimenta el KPI de falsos positivos)", "ok")
-        return redirect(request.referrer or url_for("events"))
+        return redirect(_safe_redirect(request.referrer, url_for("events"),
+                                       allow_same_origin=True))
 
     # ---------------------------------------------------- panel en vivo (JSON)
     @app.route("/api/live")
@@ -433,7 +468,7 @@ def create_app(cfg: Config) -> Flask:
         conn = get_db()
         objetivo = valid_ipv4(request.form.get("objetivo"))
         perfil = request.form.get("perfil", "quick")
-        back = request.form.get("back") or url_for("devices")
+        back = _safe_redirect(request.form.get("back"), url_for("devices"))
         if not objetivo or not ip_in_cidr(objetivo, cfg.network.cidr):
             flash(f"Objetivo inválido o fuera de {cfg.network.cidr}", "error")
             return redirect(back)
@@ -469,8 +504,7 @@ def create_app(cfg: Config) -> Flask:
                                udp_note=udp_note,
                                tools=tools, heartbeat=hb, db_size=size,
                                failed_scans=store.recent_failed_scans(conn),
-                               requests=list(conn.execute(
-                                   "SELECT * FROM scan_requests ORDER BY id DESC LIMIT 20")),
+                               requests=store.list_scan_requests(conn, limit=20),
                                effective_mode=mode)
 
     @app.errorhandler(404)

@@ -22,6 +22,12 @@
     <a class="btn ghost" href="{{ url_for('devices') }}">Limpiar</a>
   </form>
 
+  {% if truncated %}
+  <p class="banner warn">Mostrando los primeros {{ limit }} dispositivos.
+    Usa los filtros para acotar la vista o exporta el inventario completo con
+    <code>batrade export --what devices</code>.</p>
+  {% endif %}
+
   {% if devices %}
   <table class="table">
     <thead>

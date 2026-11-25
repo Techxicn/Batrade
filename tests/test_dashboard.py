@@ -124,9 +124,15 @@ def test_auth_required_when_token_configured(cfg):
     assert response.status_code == 302
     assert "/login" in response.headers["Location"]
 
-    bad = client.post("/login", data={"token": "malo"})
+    # Sin CSRF, el POST al login se rechaza (protección contra login CSRF).
+    assert client.post("/login", data={"token": "s3cret"}).status_code == 400
+
+    assert client.get("/login").status_code == 200
+    with client.session_transaction() as session:
+        csrf = session["csrf"]
+    bad = client.post("/login", data={"csrf": csrf, "token": "malo"})
     assert bad.status_code == 200
-    good = client.post("/login", data={"token": "s3cret"})
+    good = client.post("/login", data={"csrf": csrf, "token": "s3cret"})
     assert good.status_code == 302
     assert client.get("/").status_code == 200
 
