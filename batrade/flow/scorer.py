@@ -389,7 +389,7 @@ def leer_artefacto(path_npz: str | Path, path_json: str | Path) -> dict[str, Any
 # K-Means: segmentador, no scorer
 # --------------------------------------------------------------------------- #
 def _kmeans(Z, k: int, rng, n_init: int = 10, max_iter: int = 100):
-    """k-means++ con ``n_init`` arranques; devuelve (inercia, centroides, etiquetas)."""
+    """K-Means de Lloyd con ``n_init`` arranques aleatorios; devuelve (inercia, centroides, etiquetas)."""
     mejor: tuple[float, Any, Any] | None = None
     for _ in range(n_init):
         centroides = Z[rng.choice(len(Z), size=k, replace=False)].copy()

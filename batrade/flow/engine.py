@@ -26,6 +26,10 @@ from batrade.flow.scorer import (DummyScorer, Scorer, SegmentadoScorer,
 log = logging.getLogger("batrade.flow.engine")
 
 COLA_MAX = 10_000
+# Límite de hallazgos retenidos en memoria cuando no hay callback `on_finding`
+# (depuración y tests). En producción el callback persiste en SQLite y la lista
+# no crece.
+EMITTED_MAX = 1_000
 # Cada cuánto despierta del `get` para cerrar flujos vencidos aunque no llegue
 # tráfico (un flujo que se queda callado también debe cerrarse).
 SIN_TRÁFICO_S = 0.5
@@ -39,7 +43,7 @@ class FlowEngine:
     """Consume paquetes, cierra flujos y emite ``flow_anomaly``."""
 
     def __init__(self, cfg: Config, scorer: Scorer | None = None,
-                 on_finding=None):
+                 on_finding=None, *, max_emitted: int = EMITTED_MAX):
         self.cfg = cfg
         self.scorer: Scorer = scorer if scorer is not None else self._scorer_por_defecto()
         self.on_finding = on_finding
@@ -48,7 +52,8 @@ class FlowEngine:
         self.cola: queue.Queue = queue.Queue(maxsize=COLA_MAX)
         self._parar = threading.Event()
         self._hilo: threading.Thread | None = None
-        # Hallazgos cuando no hay callback (depuración y tests).
+        # Hallazgos retenidos sólo cuando no hay callback (depuración y tests).
+        self._max_emitted = max(1, int(max_emitted))
         self.emitted: list[Finding] = []
         self.descartados = 0
 
@@ -184,10 +189,13 @@ class FlowEngine:
             ip_destino=flujo.dst_ip,
             detalle=detalle,
         )
-        self.emitted.append(hallazgo)
         if self.on_finding is not None:
             try:
                 self.on_finding(hallazgo)
             except Exception:  # noqa: BLE001
                 log.exception("no se pudo entregar el hallazgo de flujo")
+        else:
+            self.emitted.append(hallazgo)
+            if len(self.emitted) > self._max_emitted:
+                del self.emitted[:-self._max_emitted]
         return hallazgo

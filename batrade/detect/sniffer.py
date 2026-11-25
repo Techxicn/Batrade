@@ -18,11 +18,15 @@ log = logging.getLogger("batrade.sniffer")
 
 # ARP + DHCP + SYN. Un BPF demasiado amplio tiraría la CPU del hogar.
 DEFAULT_FILTER = "arp or udp port 67 or udp port 68 or (tcp and tcp[tcpflags] & tcp-syn != 0)"
+# Con el motor de flujos activo hacen falta conversaciones completas (ARP e
+# IPv4 TCP/UDP), no sólo SYN y DHCP; las reglas siguen recibiendo lo suyo
+# porque `observation_from_packet` descarta TCP sin SYN y UDP distinto de DHCP.
+FLOW_FILTER = "arp or (ip and (tcp or udp))"
 
 
 def sniff_observations(iface: str, on_observation: Callable[[Observation], None],
                        stop_event: threading.Event,
-                       bpf: str = DEFAULT_FILTER,
+                       bpf: str | None = None,
                        sensor_mac: str | None = None,
                        on_packet: Callable[[object, int], object] | None = None) -> None:
     """Bucle de captura que respeta ``stop_event`` y no acumula paquetes.
@@ -31,8 +35,9 @@ def sniff_observations(iface: str, on_observation: Callable[[Observation], None]
     él quedan en ``None``, que es lo correcto para un puerto espejo.
 
     ``on_packet(pkt, ts)`` recibe cada paquete crudo **antes** de convertirlo
-    (lo usa el motor de flujos). Sin ``on_packet`` el comportamiento es el de
-    siempre: un único consumidor, ``on_observation``.
+    (lo usa el motor de flujos). Sin ``bpf`` explícito, con ``on_packet`` se
+    usa ``FLOW_FILTER`` para que el motor vea las conversaciones completas; sin
+    ``on_packet`` se mantiene ``DEFAULT_FILTER``.
     """
     try:
         from scapy.all import sniff
@@ -40,6 +45,8 @@ def sniff_observations(iface: str, on_observation: Callable[[Observation], None]
         log.error("scapy no disponible: %s", exc)
         return
 
+    filtro = (bpf if bpf is not None
+              else (FLOW_FILTER if on_packet is not None else DEFAULT_FILTER))
     packets = 0
 
     def handle(pkt) -> None:
@@ -71,7 +78,7 @@ def sniff_observations(iface: str, on_observation: Callable[[Observation], None]
             # host que habla, difusión...), y sin modo promiscuo la tarjeta
             # descarta en hardware toda trama cuya MAC destino no sea la suya.
             # El filtro BPF se aplica después, así que no se procesa de más.
-            sniff(iface=iface, filter=bpf, prn=handle, store=False, timeout=2,
+            sniff(iface=iface, filter=filtro, prn=handle, store=False, timeout=2,
                   promisc=True)
         except PermissionError:
             log.error("sin CAP_NET_RAW: sniffer deshabilitado")

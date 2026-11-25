@@ -197,12 +197,27 @@ def test_el_motor_emite_flow_anomaly_cuando_supera_el_umbral(tmp_path):
     hallazgo = motor._evaluar(_flujo_lleno())
 
     assert hallazgo is not None and capturados == [hallazgo]
+    assert motor.emitted == []            # con callback no retiene copia en memoria
     assert hallazgo.tipo == "flow_anomaly"
     assert hallazgo.severidad == "warn"
     assert hallazgo.clave == "flow:10.0.0.1:10.0.0.2:22"
     assert {"resumen", "por_que", "accion", "features"} <= set(hallazgo.detalle)
     assert hallazgo.detalle["features"]["packets"] == 4
     json.dumps(hallazgo.detalle)          # el evento se guarda como JSON
+
+
+def test_el_motor_acota_emitted_sin_callback(tmp_path):
+    motor = FlowEngine(_config_con_motor(tmp_path), scorer=_TodoAnomalo(),
+                       max_emitted=3)
+    for puerto in range(100, 106):
+        motor._evaluar(_flujo_lleno(dst_port=puerto))
+
+    assert len(motor.emitted) == 3
+    assert [h.clave for h in motor.emitted] == [
+        "flow:10.0.0.1:10.0.0.2:103",
+        "flow:10.0.0.1:10.0.0.2:104",
+        "flow:10.0.0.1:10.0.0.2:105",
+    ]
 
 
 def test_el_motor_procesa_la_cola_y_entrega_el_hallazgo(tmp_path):
