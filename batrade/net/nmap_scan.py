@@ -256,13 +256,18 @@ def _run_udp_pass(cfg: Config, target: str, caps: Capabilities,
         _safe_unlink(udp_path)
 
 
+# Sólo se retira el DOCTYPE mínimo sin subconjunto interno que genera nmap
+# (p. ej. `<!DOCTYPE nmaprun>`). Cualquier DOCTYPE con subconjunto interno
+# (`[...]`) o referencia externa (`SYSTEM`/`PUBLIC`) queda intacto para que
+# defusedxml lo rechace explícitamente con DTDForbidden.
+_SIMPLE_DOCTYPE = re.compile(rb"<!DOCTYPE\s+[A-Za-z_][\w:.-]*\s*>", re.IGNORECASE)
+
+
 def parse_xml(path: str | Path) -> dict[str, Any]:
-    """Parsea el XML de nmap con defusedxml (bloquea entidades externas)."""
+    """Parsea el XML de nmap con defusedxml (bloquea DTD externos y entidades)."""
     raw = Path(path).read_bytes()
-    # Se elimina la declaración DOCTYPE completa (nmap la incluye); hacerlo por
-    # reemplazo textual simple dejaría un fragmento inválido.
-    raw = re.sub(rb"<!DOCTYPE[^>]*>", b"", raw, flags=re.IGNORECASE)
-    root = DET.fromstring(raw)
+    raw = _SIMPLE_DOCTYPE.sub(b"", raw, count=1)
+    root = DET.fromstring(raw, forbid_dtd=True)
     ports: list[dict[str, Any]] = []
     hostnames: list[str] = []
 
