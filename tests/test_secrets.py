@@ -1,16 +1,15 @@
 """Secretos y entorno: ni tokens en errores, ni entorno heredado (S-01, S-02, S-05)."""
 from __future__ import annotations
 
-import logging
+import io
 import subprocess
+import urllib.error
 from pathlib import Path
 from typing import Any
 
 import pytest
-import requests
 
 from batrade import store
-from batrade.config import load_config
 from batrade.logging_setup import setup_logging
 from batrade.net import nmap_scan
 from batrade.net.caps import Capabilities
@@ -22,44 +21,51 @@ TOKEN = "123456789:AAHdqTcvCH1vGWJxfSeofSAs0K5PALDsaw"
 WEBHOOK = "https://discord.com/api/webhooks/123456789/abcdefTOKENdePrueba"
 
 
-class _RespuestaFalsa:
-    def __init__(self, status_code: int = 500, text: str = "") -> None:
-        self.status_code = status_code
-        self.text = text
+def _http_error(url: str, code: int, body: str) -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(
+        url, code, "Error", hdrs=None, fp=io.BytesIO(body.encode("utf-8"))
+    )
 
 
 def test_telegram_no_arrastra_el_cuerpo_de_la_respuesta(monkeypatch):
-    monkeypatch.setattr(
-        "batrade.notify.requests.post",
-        lambda *a, **k: _RespuestaFalsa(500, f"Bad Request token {TOKEN}"),
-    )
+    def falla(req, timeout=None):
+        raise _http_error(req.full_url, 500, f"Bad Request token {TOKEN}")
+
+    monkeypatch.setattr("batrade.notify.urllib.request.urlopen", falla)
     with pytest.raises(NotificationError) as exc:
         send_telegram({"type": "telegram"}, "hola", 1.0,
                       {"TELEGRAM_TOKEN": TOKEN, "TELEGRAM_CHAT_ID": "1"})
     mensaje = str(exc.value)
-    assert "400" not in mensaje or "HTTP 500" in mensaje
-    assert "Bad Request" not in mensaje          # no se copia resp.text
+    assert "HTTP 500" in mensaje
+    assert "Bad Request" not in mensaje          # no se copia el cuerpo HTTP
     assert TOKEN not in mensaje
 
 
 def test_discord_no_arrastra_el_cuerpo_de_la_respuesta(monkeypatch):
-    monkeypatch.setattr(
-        "batrade.notify.requests.post",
-        lambda *a, **k: _RespuestaFalsa(404, f"Unknown Webhook {WEBHOOK}"),
-    )
+    def falla(req, timeout=None):
+        raise _http_error(req.full_url, 404, f"Unknown Webhook {WEBHOOK}")
+
+    monkeypatch.setattr("batrade.notify.urllib.request.urlopen", falla)
     with pytest.raises(NotificationError) as exc:
         send_discord({"type": "discord"}, "{}", 1.0, {"DISCORD_WEBHOOK": WEBHOOK})
     assert "Unknown Webhook" not in str(exc.value)
     assert "abcdefTOKENdePrueba" not in str(exc.value)
 
 
+def test_discord_rechaza_esquemas_no_http():
+    with pytest.raises(NotificationError) as exc:
+        send_discord({"type": "discord"}, "{}", 1.0,
+                     {"DISCORD_WEBHOOK": "file:///etc/passwd"})
+    assert "http(s)" in str(exc.value)
+
+
 def test_excepcion_de_requests_con_url_secreta_se_sanea(monkeypatch):
     def explota(*_a, **_k):
-        raise requests.ConnectionError(
+        raise urllib.error.URLError(
             f"HTTPSConnectionPool(host='api.telegram.org'): "
             f"url: https://api.telegram.org/bot{TOKEN}/sendMessage")
 
-    monkeypatch.setattr("batrade.notify.requests.post", explota)
+    monkeypatch.setattr("batrade.notify.urllib.request.urlopen", explota)
     with pytest.raises(NotificationError) as exc:
         send_telegram({"type": "telegram"}, "hola", 1.0,
                       {"TELEGRAM_TOKEN": TOKEN, "TELEGRAM_CHAT_ID": "1"})
@@ -69,9 +75,9 @@ def test_excepcion_de_requests_con_url_secreta_se_sanea(monkeypatch):
 
 def test_excepcion_de_discord_se_sanea(monkeypatch):
     def explota(*_a, **_k):
-        raise requests.ConnectionError(f"failed for url: {WEBHOOK}")
+        raise urllib.error.URLError(f"failed for url: {WEBHOOK}")
 
-    monkeypatch.setattr("batrade.notify.requests.post", explota)
+    monkeypatch.setattr("batrade.notify.urllib.request.urlopen", explota)
     with pytest.raises(NotificationError) as exc:
         send_discord({"type": "discord"}, "{}", 1.0, {"DISCORD_WEBHOOK": WEBHOOK})
     assert "abcdefTOKENdePrueba" not in str(exc.value)
@@ -81,9 +87,9 @@ def test_la_cola_guarda_el_error_redactado(monkeypatch, cfg):
     from batrade.notify import Notifier
 
     monkeypatch.setattr(
-        "batrade.notify.requests.post",
+        "batrade.notify.urllib.request.urlopen",
         lambda *a, **k: (_ for _ in ()).throw(
-            requests.ConnectionError(f"url: https://discord.com/api/webhooks/1/{TOKEN}")),
+            urllib.error.URLError(f"url: https://discord.com/api/webhooks/1/{TOKEN}")),
     )
     cfg.notify.channels = [{"type": "discord"}]
     from batrade import db

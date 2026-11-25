@@ -209,19 +209,19 @@ detect_distro() {
 
     case "$PM" in
         apt)
-            PKGS="nmap arp-scan iproute2 python3 python3-venv python3-yaml python3-flask python3-requests python3-defusedxml python3-scapy"
+            PKGS="nmap arp-scan iproute2 python3 python3-venv python3-yaml python3-flask python3-defusedxml python3-scapy"
             INSTALL_CMD=(apt-get install -y) ;;
         dnf)
-            PKGS="nmap arp-scan iproute python3 python3-pyyaml python3-flask python3-requests python3-defusedxml python3-scapy"
+            PKGS="nmap arp-scan iproute python3 python3-pyyaml python3-flask python3-defusedxml python3-scapy"
             INSTALL_CMD=(dnf install -y) ;;
         pacman)
-            PKGS="nmap arp-scan iproute2 python python-pyyaml python-flask python-requests python-defusedxml python-scapy"
+            PKGS="nmap arp-scan iproute2 python python-pyyaml python-flask python-defusedxml python-scapy"
             INSTALL_CMD=(pacman -S --needed --noconfirm) ;;
         zypper)
-            PKGS="nmap arp-scan iproute2 python3 python3-PyYAML python3-Flask python3-requests python3-defusedxml python3-scapy"
+            PKGS="nmap arp-scan iproute2 python3 python3-PyYAML python3-Flask python3-defusedxml python3-scapy"
             INSTALL_CMD=(zypper --non-interactive install) ;;
         apk)
-            PKGS="nmap arp-scan iproute2 python3 py3-yaml py3-flask py3-requests py3-defusedxml py3-scapy"
+            PKGS="nmap arp-scan iproute2 python3 py3-yaml py3-flask py3-defusedxml py3-scapy"
             INSTALL_CMD=(apk add) ;;
         *)
             PKGS=""
@@ -512,7 +512,7 @@ if ! "$PY_BIN" - <<'PYEOF'
 import importlib.util
 import sys
 
-need = {"yaml": "PyYAML", "flask": "Flask", "requests": "requests",
+need = {"yaml": "PyYAML", "flask": "Flask",
         "defusedxml": "defusedxml", "scapy": "scapy"}
 missing = [pkg for mod, pkg in need.items()
            if importlib.util.find_spec(mod) is None]
