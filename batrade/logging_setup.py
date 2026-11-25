@@ -104,7 +104,8 @@ class _RotatingFileHandler(logging.handlers.RotatingFileHandler):
 
 
 def setup_logging(log_dir: Path, component: str = "batrade", level: int = logging.INFO,
-                  console: bool = True) -> logging.Logger:
+                  console: bool = True,
+                  secretos: tuple[str, ...] | None = None) -> logging.Logger:
     """Configura (idempotente) el logger del componente."""
     if component in _LOGGERS:
         return _LOGGERS[component]
@@ -118,18 +119,19 @@ def setup_logging(log_dir: Path, component: str = "batrade", level: int = loggin
     logger.setLevel(level)
     logger.propagate = False
 
+    lista_secretos = secretos if secretos is not None else secretos_conocidos()
     fh = _RotatingFileHandler(
         log_dir / f"{component}.log", maxBytes=2 * 1024 * 1024, backupCount=5,
         encoding="utf-8",
     )
     fh.setFormatter(JsonFormatter())
-    fh.addFilter(RedactingFilter(secretos_conocidos()))
+    fh.addFilter(RedactingFilter(lista_secretos))
     logger.addHandler(fh)
 
     if console:
         ch = logging.StreamHandler(sys.stderr)
         ch.setFormatter(HumanFormatter())
-        ch.addFilter(RedactingFilter(secretos_conocidos()))
+        ch.addFilter(RedactingFilter(lista_secretos))
         logger.addHandler(ch)
 
     _LOGGERS[component] = logger

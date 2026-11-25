@@ -78,3 +78,35 @@ def test_udp_and_tcp_catalog_coexist(cfg):
 def test_unreadable_dotenv_is_ignored(tmp_path):
     # En systemd el .env puede pertenecer a otro usuario: no debe tumbar el arranque.
     assert load_dotenv(tmp_path) == {}
+
+
+def test_load_dotenv_does_not_pollute_os_environ(tmp_path, monkeypatch):
+    """S-02: los secretos de .env viajan en Config.secrets, no en os.environ."""
+    import os
+    from batrade.config import load
+
+    monkeypatch.delenv("TELEGRAM_TOKEN", raising=False)
+    monkeypatch.delenv("DASHBOARD_TOKEN", raising=False)
+    (tmp_path / ".env").write_text(
+        "TELEGRAM_TOKEN=123456789:secret_from_dotenv_value\n"
+        "DASHBOARD_TOKEN=dash_token_from_dotenv_12345\n",
+        encoding="utf-8",
+    )
+    cfg_path = _write(tmp_path, host="0.0.0.0")
+
+    cfg = load(str(cfg_path), tmp_path)
+    assert "TELEGRAM_TOKEN" not in os.environ
+    assert "DASHBOARD_TOKEN" not in os.environ
+    assert cfg.dashboard.auth_token == "dash_token_from_dotenv_12345"
+    assert cfg.secrets["TELEGRAM_TOKEN"] == "123456789:secret_from_dotenv_value"
+    assert "secret_from_dotenv_value" not in repr(cfg)
+
+
+def test_load_config_has_no_filesystem_side_effects(tmp_path):
+    """D-04: validar/cargar config.yaml no crea directorios en disco."""
+    cfg_path = _write(tmp_path)
+    cfg = load_config(cfg_path, tmp_path)
+    assert not (tmp_path / "var").exists()
+    cfg.ensure_dirs()
+    assert cfg.paths.scans_dir.is_dir()
+    assert cfg.paths.log_dir.is_dir()

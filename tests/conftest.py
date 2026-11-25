@@ -76,7 +76,9 @@ def cfg(tmp_path, monkeypatch):
     monkeypatch.delenv("DASHBOARD_TOKEN", raising=False)
     path = tmp_path / "config.yaml"
     path.write_text(BASE_YAML, encoding="utf-8")
-    return load_config(path, tmp_path)
+    loaded = load_config(path, tmp_path)
+    loaded.ensure_dirs()
+    return loaded
 
 
 @pytest.fixture

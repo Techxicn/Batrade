@@ -20,7 +20,7 @@ import requests
 from batrade import store
 from batrade.config import Config
 from batrade.net.iputil import now_ms
-from batrade.redact import redactar
+from batrade.redact import redactar, secretos_conocidos
 
 log = logging.getLogger("batrade.notify")
 
@@ -127,7 +127,7 @@ def send_telegram(channel: dict[str, Any], text: str, timeout: float,
         )
     except requests.RequestException as exc:
         # La excepción puede arrastrar la URL con el token: se sanea al origen.
-        raise NotificationError(redactar(str(exc))) from None
+        raise NotificationError(redactar(str(exc), secretos_conocidos(env))) from None
     if resp.status_code >= 300:
         # Sólo el código: el cuerpo de la respuesta no aporta y puede traer datos.
         raise NotificationError(f"Telegram HTTP {resp.status_code}")
@@ -141,7 +141,7 @@ def send_discord(channel: dict[str, Any], payload_text: str, timeout: float,
     try:
         resp = requests.post(url, json=json.loads(payload_text), timeout=timeout)
     except requests.RequestException as exc:
-        raise NotificationError(redactar(str(exc))) from None
+        raise NotificationError(redactar(str(exc), secretos_conocidos(env))) from None
     if resp.status_code >= 300:
         raise NotificationError(f"Discord HTTP {resp.status_code}")
 
@@ -260,7 +260,7 @@ class Notifier:
             delay = backoff_seconds(attempts) * 1000
             # Nunca se guarda ni se registra el texto crudo: puede traer la URL
             # del webhook o el token del bot.
-            error = redactar(str(exc))
+            error = redactar(str(exc), secretos_conocidos(self.env))
             store.notification_failed(conn, int(row["id"]), error,
                                       None if agotado else ts + delay, agotado)
             self.failed += 1

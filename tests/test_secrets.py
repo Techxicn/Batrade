@@ -165,3 +165,21 @@ def test_el_log_redacta_tokens_y_webhooks(monkeypatch, tmp_path):
     assert TOKEN not in texto
     assert "abcdefTOKENdePrueba" not in texto
     assert "<redactado>" in texto
+
+
+def test_el_log_y_redactar_tapan_dashboard_token(monkeypatch, tmp_path):
+    from batrade.redact import redactar, secretos_conocidos
+
+    dash_token = "dash_secreto_de_prueba_64chars_0123456789abcdef"
+    monkeypatch.setenv("DASHBOARD_TOKEN", dash_token)
+
+    assert dash_token in secretos_conocidos()
+    assert dash_token not in redactar(f"fallo con token {dash_token}")
+
+    logger = setup_logging(tmp_path, component="prueba-redaccion-dash", console=False)
+    logger.warning("acceso rechazado para %s", dash_token,
+                   extra={"fields": {"token": dash_token}})
+
+    texto = (tmp_path / "prueba-redaccion-dash.log").read_text(encoding="utf-8")
+    assert dash_token not in texto
+    assert "<redactado>" in texto
