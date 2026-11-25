@@ -1,11 +1,53 @@
 {% extends "base.html" %}
 {% block title %}Panel{% endblock %}
 {% block content %}
+{% macro plural(n, uno, varios) %}{{ uno if n == 1 else varios }}{% endmacro %}
 
-<section class="metrics">
+<div class="page-head">
+  <div>
+    <h1>Panel</h1>
+    <p class="page-meta">
+      <span>red=<b>{{ cfg.network.cidr }}</b></span>
+      <span>iface=<b>{{ cfg.network.interface or "auto" }}</b></span>
+      <span>línea_base=<b>{{ "en_aprendizaje" if base.learning else "aprobada" }}</b></span>
+    </p>
+  </div>
+  <p class="muted small" data-live="actualizado">actualizado {{ generado|hora }}</p>
+</div>
+
+{# Barra de severidad de hoy: reemplaza las tarjetas «Alertas hoy» y «Falsos
+   positivos hoy». live.js la refresca con resumen.alertas_hoy y fp_hoy. #}
+<section class="sevbar" aria-label="Alertas de hoy">
+  <div class="sevbar-total">
+    <span class="metric-label">Alertas hoy</span>
+    <strong class="metric-value" data-live="alertas-total">{{ total_today }}</strong>
+  </div>
+  <div class="sevbar-body">
+    <div class="sevbar-track" role="img" data-live="alertas-barra"
+         aria-label="{{ sev['crit'] }} {{ plural(sev['crit'], 'crítica', 'críticas') }}, {{ sev['warn'] }} {{ plural(sev['warn'], 'advertencia', 'advertencias') }}, {{ sev['info'] }} {{ plural(sev['info'], 'informativa', 'informativas') }}">
+      {% for clave in ("crit", "warn", "info") %}
+      <span class="sevbar-seg {{ clave }}" data-live-seg="{{ clave }}"
+            style="flex-grow: {{ sev[clave] }}"{% if not sev[clave] %} hidden{% endif %}></span>
+      {% endfor %}
+      <span class="sevbar-seg vacio" data-live-seg="vacio"{% if total_today %} hidden{% endif %}></span>
+    </div>
+    <p class="sevbar-legend">
+      <span><span class="sev-dot crit" aria-hidden="true"></span><strong data-live="alertas-crit">{{ sev["crit"] }}</strong>
+        <span data-live="alertas-crit-label">{{ plural(sev["crit"], "crítica", "críticas") }}</span></span>
+      <span><span class="sev-dot warn" aria-hidden="true"></span><strong data-live="alertas-warn">{{ sev["warn"] }}</strong>
+        <span data-live="alertas-warn-label">{{ plural(sev["warn"], "advertencia", "advertencias") }}</span></span>
+      <span><span class="sev-dot info" aria-hidden="true"></span><strong data-live="alertas-info">{{ sev["info"] }}</strong>
+        <span data-live="alertas-info-label">{{ plural(sev["info"], "informativa", "informativas") }}</span></span>
+      <span>· <strong data-live="fp">{{ fp_today }}</strong>
+        <span data-live="fp-sub">{{ plural(fp_today, "falso positivo", "falsos positivos") }}</span></span>
+    </p>
+  </div>
+</section>
+
+<section class="metrics" aria-label="Resumen">
   <article class="metric">
     <span class="metric-label">En línea</span>
-    <strong class="metric-value" data-live="en-linea">{{ counts["online"] or 0 }}</strong>
+    <strong class="metric-value accent-text" data-live="en-linea">{{ counts["online"] or 0 }}</strong>
     <span class="metric-sub" data-live="total">de {{ counts["total"] or 0 }} conocidos</span>
   </article>
   <article class="metric">
@@ -19,16 +61,6 @@
     <span class="metric-sub">marcados por ti</span>
   </article>
   <article class="metric">
-    <span class="metric-label">Alertas hoy</span>
-    <strong class="metric-value {{ 'crit-text' if sev['crit'] }}" data-live="alertas-crit">{{ sev["crit"] }}</strong>
-    <span class="metric-sub" data-live="alertas-sub">{{ sev["warn"] }} advertencias · {{ sev["info"] }} info</span>
-  </article>
-  <article class="metric">
-    <span class="metric-label">Falsos positivos hoy</span>
-    <strong class="metric-value" data-live="fp">{{ fp_today }}</strong>
-    <span class="metric-sub" data-live="fp-sub">de {{ total_today }} eventos</span>
-  </article>
-  <article class="metric">
     <span class="metric-label">Acceso</span>
     <strong class="metric-value small">{{ "logueado" if session.get("auth") else "local" }}</strong>
     <span class="metric-sub">{{ cfg.dashboard.host }}:{{ cfg.dashboard.port }}</span>
@@ -39,9 +71,10 @@
   <section class="card grow">
     <header class="card-head">
       <h2>Últimas alertas</h2>
-      <a class="more" href="{{ url_for('events') }}">ver todas →</a>
+      <a class="more" href="{{ url_for('events') }}">ver todas --&gt;</a>
     </header>
     {% if recent %}
+    <div class="table-wrap">
     <table class="table">
       <thead><tr><th>Severidad</th><th>Evento</th><th>Origen</th><th>Cuándo</th><th></th></tr></thead>
       <tbody>
@@ -59,6 +92,7 @@
       {% endfor %}
       </tbody>
     </table>
+    </div>
     {% else %}
     <p class="empty">Todavía no hay eventos. Arranca el sensor o ejecuta
       <code>python3 -m batrade demo</code> para poblar el panel.</p>

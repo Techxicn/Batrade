@@ -3,6 +3,18 @@
 Todos los cambios notables de **Batrade Home-SOC** se documentan en este archivo.
 El formato sigue [Keep a Changelog](https://keepachangelog.com/es-ES/1.1.0/) y las versiones siguen [Versionado Semántico](https://semver.org/lang/es/).
 
+## [Unreleased]
+
+### Cambiado
+- **Tema «Fósforo» en el panel web** (`batrade/dashboard/static/style.css`): estética de terminal con tipografía monoespaciada, esquinas rectas, navegación en vídeo inverso y etiquetas de severidad entre corchetes. Todos los colores pasan a variables de `:root` (contraste AA comprobado) y las ligaduras tipográficas se desactivan para que IPs, MACs y textos de red se lean tal cual.
+- **Barra de severidad del día en `/`**: sustituye a las tarjetas «Alertas hoy» y «Falsos positivos hoy»; cada tramo (crítico, advertencia, informativo) crece en proporción a su recuento y `live.js` la refresca en cada sondeo, con singular/plural y etiqueta accesible.
+- Cabecera de página en `/` con la red, la interfaz y el estado de la línea base, y la hora del último sondeo correcto.
+- Las tablas anchas de `/`, `/devices` y `/events` se desplazan dentro de su recuadro en pantallas estrechas.
+
+### Añadido
+- Fuente **JetBrains Mono** (SIL OFL 1.1) servida desde `batrade/dashboard/static/fonts/` con su licencia y declarada en `package-data`: el panel sigue funcionando sin internet.
+- `tests/test_dashboard_theme.py`: barra de severidad, recursos locales del CSS, fuente empaquetada y servida sin sesión.
+
 ## [0.1.0] - 2026-11-25
 
 Primera versión pública bajo **licencia MIT**.

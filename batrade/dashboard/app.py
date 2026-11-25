@@ -279,6 +279,12 @@ def create_app(cfg: Config) -> Flask:
             return "—"
         return datetime.fromtimestamp(int(ms) / 1000).strftime("%d/%m/%Y %H:%M:%S")
 
+    @app.template_filter("hora")
+    def _fmt_hora(ms):  # noqa: ANN001
+        if ms is None or ms == "":
+            return "—"
+        return datetime.fromtimestamp(int(ms) / 1000).strftime("%H:%M:%S")
+
     @app.template_filter("ago")
     def _fmt_ago(ms):  # noqa: ANN001
         return _human_age(None if ms is None or ms == "" else int(ms))
@@ -326,6 +332,7 @@ def create_app(cfg: Config) -> Flask:
             "index.html", counts=counts, sev=sev, recent=recent, base=base,
             total_today=total_today, fp_today=int(fp_today),
             health=_health(conn), caps=caps.summary(), mode_notes=mode_notes,
+            generado=now_ms(),
         )
 
     # ------------------------------------------------------------ dispositivos

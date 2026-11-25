@@ -27,6 +27,7 @@
 
   {# La tabla se renderiza siempre para que el panel en vivo pueda insertar
      filas sin recargar; sin eventos queda oculta tras el aviso. #}
+  <div class="table-wrap">
   <table class="table" id="events-table" {% if not events %}hidden{% endif %}>
     <thead>
       <tr><th>Severidad</th><th>Evento</th><th>Origen</th><th>Destino</th>
@@ -69,6 +70,7 @@
     {% endfor %}
     </tbody>
   </table>
+  </div>
   <p class="empty" id="events-empty" {% if events %}hidden{% endif %}>Sin alertas con ese filtro.</p>
 </section>
 

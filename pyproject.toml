@@ -33,6 +33,8 @@ batrade = [
     "dashboard/templates/*.html",
     "dashboard/static/*.css",
     "dashboard/static/*.js",
+    "dashboard/static/fonts/*.woff2",
+    "dashboard/static/fonts/*.txt",
 ]
 
 [tool.ruff]
