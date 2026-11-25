@@ -6,6 +6,7 @@ GitHub. Este test lo fija.
 """
 from __future__ import annotations
 
+import ast
 import tomllib
 from pathlib import Path
 
@@ -47,3 +48,31 @@ def test_docs_refer_to_the_same_dev_extra():
         texto = (RAIZ / doc).read_text(encoding="utf-8")
         if "[dev]" in texto:
             assert 'pip install' in texto
+
+
+def test_license_file_and_metadata_exist():
+    licencia = RAIZ / "LICENSE"
+    assert licencia.is_file()
+    assert "MIT License" in licencia.read_text(encoding="utf-8")
+    proyecto = _pyproject()["project"]
+    assert proyecto.get("license") == {"file": "LICENSE"}
+
+
+def test_all_sql_lives_in_store_and_db():
+    """Invariante #1 (CONTRIBUTING.md): ninguna llamada `.execute()` fuera de store.py/db.py."""
+    permitidos = {
+        (RAIZ / "batrade" / "store.py").resolve(),
+        (RAIZ / "batrade" / "db.py").resolve(),
+    }
+    infractores: list[str] = []
+    for ruta in sorted((RAIZ / "batrade").rglob("*.py")):
+        if ruta.resolve() in permitidos:
+            continue
+        arbol = ast.parse(ruta.read_text(encoding="utf-8"), filename=str(ruta))
+        for nodo in ast.walk(arbol):
+            if (isinstance(nodo, ast.Call)
+                    and isinstance(nodo.func, ast.Attribute)
+                    and nodo.func.attr in ("execute", "executemany", "executescript")):
+                rel = ruta.relative_to(RAIZ)
+                infractores.append(f"{rel}:{nodo.lineno}")
+    assert infractores == [], f"SQL fuera de store.py/db.py: {infractores}"

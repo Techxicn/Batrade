@@ -6,6 +6,8 @@ build-backend = "setuptools.build_meta"
 name = "batrade"
 version = "0.1.0"
 description = "Batrade Home-SOC: monitor local de red doméstica (IDS, solo detección)"
+readme = "README.md"
+license = { file = "LICENSE" }
 requires-python = ">=3.11"
 dependencies = [
     "PyYAML>=6.0",

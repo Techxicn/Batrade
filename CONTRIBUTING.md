@@ -104,9 +104,7 @@ Antes de enviar un cambio, como mínimo:
 
 ## Licencia de las contribuciones
 
-Hoy **no hay licencia pública** (D-12): el repositorio está «todos los derechos
-reservados» y no se aceptan contribuciones de código de terceros hasta que el
-titular elija licencia y exista un acuerdo claro de cesión. Si quieres proponer
-un cambio, abre un issue o envía un parche como *sugerencia*: se valorará y, si
-entra, lo hará como cambio del mantenedor. Es el precio de no tener licencia
-todavía, y se resuelve en cuanto D-12 se cierre con una licencia.
+Batrade se distribuye bajo la **licencia MIT** (`LICENSE`). Al enviar una
+contribución (PR o parche), aceptas que quede cubierta por la misma licencia
+MIT del proyecto. Recuerda que `scapy` es **GPL-2.0-only**: no se copia código
+suyo en este árbol; se mantiene siempre como dependencia externa.
