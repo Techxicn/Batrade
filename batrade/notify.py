@@ -14,10 +14,10 @@ import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
+import urllib.error
+import urllib.request
 
-import requests
-
-from batrade import store
+from batrade import __version__, store
 from batrade.config import Config
 from batrade.net.iputil import now_ms
 from batrade.redact import redactar, secretos_conocidos
@@ -112,25 +112,49 @@ class NotificationError(RuntimeError):
     pass
 
 
+def _post_json(url: str, payload: dict[str, Any], timeout: float,
+               channel_label: str, env: dict[str, str]) -> None:
+    """Envía JSON por HTTP(S) usando sólo la librería estándar (sin ``requests``)."""
+    data = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "Content-Type": "application/json; charset=utf-8",
+            "User-Agent": f"Batrade/{__version__}",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            status = getattr(resp, "status", None)
+            if status is None:
+                status = resp.getcode()
+            status = 200 if status is None else int(status)
+    except urllib.error.HTTPError as exc:
+        # Sólo el código: el cuerpo de la respuesta no aporta y puede traer datos.
+        raise NotificationError(f"{channel_label} HTTP {exc.code}") from None
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        # La excepción puede arrastrar la URL con el token/webhook: se sanea al origen.
+        raise NotificationError(redactar(str(exc), secretos_conocidos(env))) from None
+    if status >= 300:
+        raise NotificationError(f"{channel_label} HTTP {status}")
+
+
 def send_telegram(channel: dict[str, Any], text: str, timeout: float,
                   env: dict[str, str]) -> None:
     token = env.get(channel.get("token_env", "TELEGRAM_TOKEN"), "")
     chat_id = env.get(channel.get("chat_id_env", "TELEGRAM_CHAT_ID"), "")
     if not token or not chat_id:
         raise NotificationError("Telegram sin TELEGRAM_TOKEN/TELEGRAM_CHAT_ID configurados")
-    try:
-        resp = requests.post(
-            f"https://api.telegram.org/bot{token}/sendMessage",
-            json={"chat_id": chat_id, "text": text, "parse_mode": "HTML",
-                  "disable_web_page_preview": True},
-            timeout=timeout,
-        )
-    except requests.RequestException as exc:
-        # La excepción puede arrastrar la URL con el token: se sanea al origen.
-        raise NotificationError(redactar(str(exc), secretos_conocidos(env))) from None
-    if resp.status_code >= 300:
-        # Sólo el código: el cuerpo de la respuesta no aporta y puede traer datos.
-        raise NotificationError(f"Telegram HTTP {resp.status_code}")
+    _post_json(
+        f"https://api.telegram.org/bot{token}/sendMessage",
+        {"chat_id": chat_id, "text": text, "parse_mode": "HTML",
+         "disable_web_page_preview": True},
+        timeout,
+        "Telegram",
+        env,
+    )
 
 
 def send_discord(channel: dict[str, Any], payload_text: str, timeout: float,
@@ -138,12 +162,9 @@ def send_discord(channel: dict[str, Any], payload_text: str, timeout: float,
     url = env.get(channel.get("webhook_env", "DISCORD_WEBHOOK"), "")
     if not url:
         raise NotificationError("Discord sin DISCORD_WEBHOOK configurado")
-    try:
-        resp = requests.post(url, json=json.loads(payload_text), timeout=timeout)
-    except requests.RequestException as exc:
-        raise NotificationError(redactar(str(exc), secretos_conocidos(env))) from None
-    if resp.status_code >= 300:
-        raise NotificationError(f"Discord HTTP {resp.status_code}")
+    if not url.startswith(("https://", "http://")):
+        raise NotificationError("Discord DISCORD_WEBHOOK debe ser una URL http(s)")
+    _post_json(url, json.loads(payload_text), timeout, "Discord", env)
 
 
 class LocalSink:

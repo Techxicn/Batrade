@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
-from typing import Any, Iterable, Sequence
+from typing import Any, Iterable
 
 from batrade.config import RiskyPort
 from batrade.db import get_meta, set_meta  # noqa: F401 - reexport usado por inventario/sensor

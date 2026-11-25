@@ -1,15 +1,12 @@
 """reset-db: borrado manual y explícito, sólo CLI con root y sensor parado."""
 from __future__ import annotations
 
-import io
 import json
-import os
 from types import SimpleNamespace
 
 import pytest
 
 from batrade import cli, db, store
-from batrade.net.iputil import now_ms
 
 
 def _args(**kwargs):

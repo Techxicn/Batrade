@@ -17,7 +17,6 @@ import queue
 import signal
 import sqlite3
 import threading
-import time
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Iterable

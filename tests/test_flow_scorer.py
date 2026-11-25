@@ -48,7 +48,6 @@ def _c2(intervalo_ms: int = 60_000, paquetes: int = 12) -> FlowFeatures:
 def baseline(tmp_path_factory) -> list[FlowFeatures]:
     """Características del pcap de tráfico normal que usa el entrenamiento."""
     raiz = tmp_path_factory.mktemp("baseline")
-    from batrade.config import Config
     cfg = load_config(_escribir_cfg(raiz), raiz)
     pcap = raiz / "baseline.pcap"
     write_baseline_pcap(str(pcap), cfg, clientes=12)

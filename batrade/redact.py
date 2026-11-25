@@ -1,6 +1,6 @@
 """Redacción de secretos en textos que se registran o se guardan (S-01, S-02).
 
-Una excepción de ``requests`` arrastra la URL completa: ``/bot<token>/`` en
+Una excepción HTTP (``urllib``) puede arrastrar la URL completa: ``/bot<token>/`` en
 Telegram y ``/api/webhooks/<id>/<token>`` en Discord. Aquí se tapan esos
 patrones y, además, los valores exactos de las variables de canal configuradas,
 antes de que el texto llegue al log, a ``notification_queue.last_error``, a

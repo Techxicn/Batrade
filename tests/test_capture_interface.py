@@ -11,15 +11,15 @@ scapy_all = pytest.importorskip("scapy.all")
 ScapyARP = scapy_all.ARP
 Ether = scapy_all.Ether
 
-from batrade import cli, db
-from batrade.config import ConfigError, load_config
-from batrade.detect.observation import ARP, Observation
-from batrade.net.ifaces import IfaceInfo, find as find_real
-from batrade.net import ifaces as ifaces_mod
-from batrade.net.discovery import Discovery
-from batrade.sensor import Sensor
+from batrade import cli, db  # noqa: E402
+from batrade.config import ConfigError, load_config  # noqa: E402
+from batrade.detect.observation import ARP, Observation  # noqa: E402
+from batrade.net.ifaces import IfaceInfo, find as find_real  # noqa: E402
+from batrade.net import ifaces as ifaces_mod  # noqa: E402
+from batrade.net.discovery import Discovery  # noqa: E402
+from batrade.sensor import Sensor  # noqa: E402
 
-from tests.conftest import SENSOR_MAC
+from tests.conftest import SENSOR_MAC  # noqa: E402
 
 
 def _yaml(tmp_path, red: str, extra: str = "") -> Path:

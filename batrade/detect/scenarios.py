@@ -165,7 +165,6 @@ def write_pcap(scenario: str, path: str, cfg: Config, base_ts: int = BASE_TS) ->
     from scapy.all import (BOOTP, DHCP as ScapyDHCP, Ether, IP, TCP, UDP,  # noqa: F401
                            wrpcap)
 
-    c = _ctx(cfg)
     packets = []
     t0 = base_ts / 1000.0
     for obs in synthetic(scenario, cfg, base_ts):
