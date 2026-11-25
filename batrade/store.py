@@ -160,6 +160,46 @@ def set_device_state(conn: sqlite3.Connection, device_id: int, *,
     return cur.rowcount > 0
 
 
+def set_device_hostname_if_missing(conn: sqlite3.Connection, device_id: int,
+                                   hostname: str) -> bool:
+    """Rellena ``hostname`` si aún está vacío (nunca pisa un valor previo)."""
+    cur = conn.execute(
+        "UPDATE devices SET hostname = COALESCE(hostname, ?) WHERE id = ?",
+        (str(hostname)[:63], device_id),
+    )
+    return cur.rowcount > 0
+
+
+def online_device_ids(conn: sqlite3.Connection) -> list[int]:
+    """Ids de equipos marcados actualmente en línea."""
+    rows = conn.execute("SELECT id FROM devices WHERE en_linea = 1").fetchall()
+    return [int(r["id"]) for r in rows]
+
+
+def review_candidate_devices(conn: sqlite3.Connection) -> list[sqlite3.Row]:
+    """Equipos desconocidos que conviene revisar uno a uno antes de aprobar."""
+    return list(conn.execute(
+        "SELECT * FROM devices WHERE estado_confianza = 'desconocido' "
+        "AND (mac_aleatoria = 1 OR hostname IS NULL OR fabricante IS NULL) "
+        "ORDER BY last_seen DESC"
+    ))
+
+
+def approve_unknown_devices(conn: sqlite3.Connection, *,
+                            include_random_mac: bool = False) -> tuple[int, int]:
+    """Pasa a ``confiable`` los equipos desconocidos y devuelve (aprobados, pendientes)."""
+    where = "" if include_random_mac else "AND mac_aleatoria = 0"
+    cur = conn.execute(
+        f"UPDATE devices SET estado_confianza = 'confiable' "
+        f"WHERE estado_confianza = 'desconocido' {where}"
+    )
+    confirmed = cur.rowcount
+    remaining = conn.execute(
+        "SELECT COUNT(*) AS n FROM devices WHERE estado_confianza = 'desconocido'"
+    ).fetchone()["n"]
+    return int(confirmed), int(remaining)
+
+
 def list_devices(conn: sqlite3.Connection, *, estado: str | None = None,
                  search: str | None = None, only_online: bool = False,
                  limit: int = 500) -> list[sqlite3.Row]:
@@ -356,6 +396,24 @@ def close_scan_request(conn: sqlite3.Connection, req_id: int, estado: str,
     )
 
 
+def list_scans_for_device(conn: sqlite3.Connection, device_id: int,
+                          limit: int = 10) -> list[sqlite3.Row]:
+    """Últimos escaneos de un equipo, del más reciente al más antiguo."""
+    return list(conn.execute(
+        "SELECT * FROM scans WHERE device_id = ? ORDER BY id DESC LIMIT ?",
+        (device_id, max(1, int(limit))),
+    ))
+
+
+def list_scan_requests(conn: sqlite3.Connection,
+                       limit: int = 20) -> list[sqlite3.Row]:
+    """Últimas solicitudes manuales de escaneo."""
+    return list(conn.execute(
+        "SELECT * FROM scan_requests ORDER BY id DESC LIMIT ?",
+        (max(1, int(limit)),),
+    ))
+
+
 def last_scan_ts(conn: sqlite3.Connection, device_id: int, perfil: str,
                  only_ok: bool = True) -> int | None:
     """Fin del último escaneo completado de ese perfil para un equipo (RF-10).
@@ -496,6 +554,47 @@ def list_events(conn: sqlite3.Connection, *, severidad: str | None = None,
 
 def get_event(conn: sqlite3.Connection, event_id: int) -> sqlite3.Row | None:
     return conn.execute("SELECT * FROM events WHERE id = ?", (event_id,)).fetchone()
+
+
+def list_event_types(conn: sqlite3.Connection) -> list[str]:
+    """Tipos distintos presentes en ``events`` (filtro del panel)."""
+    return [str(r["tipo"]) for r in conn.execute(
+        "SELECT DISTINCT tipo FROM events ORDER BY tipo"
+    )]
+
+
+def count_events(conn: sqlite3.Connection) -> dict[str, int]:
+    """Total de eventos y cuántos han sido notificados."""
+    row = conn.execute(
+        "SELECT COUNT(*) AS total, "
+        "COALESCE(SUM(CASE WHEN notificado = 1 THEN 1 ELSE 0 END), 0) AS notificados "
+        "FROM events"
+    ).fetchone()
+    if row is None:
+        return {"total": 0, "notificados": 0}
+    return {"total": int(row["total"]), "notificados": int(row["notificados"])}
+
+
+def export_rows(conn: sqlite3.Connection, what: str) -> list[dict[str, Any]]:
+    """Filas listas para exportar en CSV/JSON desde la CLI."""
+    if what == "devices":
+        sql = (
+            "SELECT id, mac, ip_actual, fabricante, hostname, alias, estado_confianza, "
+            "mac_aleatoria, first_seen, last_seen, en_linea FROM devices ORDER BY id"
+        )
+    elif what == "ports":
+        sql = (
+            "SELECT device_id, protocolo, puerto, estado, servicio, version, riesgoso, "
+            "first_seen, last_seen FROM ports ORDER BY device_id, puerto"
+        )
+    elif what == "events":
+        sql = (
+            "SELECT id, ts, severidad, tipo, ip_origen, mac_origen, ip_destino, "
+            "repeat_count, disposicion, notificado FROM events ORDER BY ts DESC"
+        )
+    else:
+        raise ValueError(f"entidad de exportación desconocida: {what!r}")
+    return [dict(r) for r in conn.execute(sql)]
 
 
 def event_counts(conn: sqlite3.Connection, since: int) -> dict[str, int]:

@@ -39,6 +39,7 @@ DEMO_PORTS = {
 
 def seed_demo(cfg: Config, scenario_names: list[str] | None = None) -> dict[str, int]:
     names = scenario_names or ["mixed", "router_reboot"]
+    cfg.ensure_dirs()
     conn = db.initialize(cfg.paths.db)
     ts_now = now_ms()
     oui = OuiDB.load(cfg.paths.oui_file)
@@ -86,14 +87,14 @@ def seed_demo(cfg: Config, scenario_names: list[str] | None = None) -> dict[str,
         cfg.notify.channels = original_channels
 
     counts = store.count_devices(conn)
+    ev_counts = store.count_events(conn)
     return {
         "dispositivos": counts.get("total", 0),
         "en_linea": counts.get("online", 0),
         "desconocidos": counts.get("desconocidos", 0),
         "no_autorizados": counts.get("no_autorizados", 0),
-        "eventos": conn.execute("SELECT COUNT(*) AS n FROM events").fetchone()["n"],
-        "notificados": conn.execute(
-            "SELECT COUNT(*) AS n FROM events WHERE notificado = 1").fetchone()["n"],
+        "eventos": ev_counts["total"],
+        "notificados": ev_counts["notificados"],
     }
 
 

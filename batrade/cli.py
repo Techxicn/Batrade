@@ -23,6 +23,7 @@ from pathlib import Path
 from batrade import __version__, db, store
 from batrade.config import Config, ConfigError, load, validar_host_expuesto
 from batrade.logging_setup import setup_logging
+from batrade.redact import secretos_conocidos
 from batrade.net import caps as caps_mod
 from batrade.net import ifaces
 from batrade.net.iputil import default_gateway, ip_in_cidr
@@ -135,7 +136,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"  - {err}", file=sys.stderr)
         return 2
 
-    setup_logging(cfg.paths.log_dir, "batrade")
+    cfg.ensure_dirs()
+    setup_logging(cfg.paths.log_dir, "batrade",
+                  secretos=secretos_conocidos(cfg.secrets))
     handler = {"doctor": cmd_doctor, "init": cmd_init, "sensor": cmd_sensor,
                "dashboard": cmd_dashboard, "demo": cmd_demo,
                "approve-baseline": cmd_approve, "export": cmd_export,
@@ -300,8 +303,12 @@ def cmd_doctor(cfg: Config, _args) -> int:
     caps = caps_mod.probe()
     mode, notes = caps_mod.resolve_mode(cfg.sensor.mode, caps)
     conn = db.initialize(cfg.paths.db)
-    rows = store.count_devices(conn)
-    hb = store.get_heartbeat(conn, "sensor")
+    try:
+        rows = store.count_devices(conn)
+        hb = store.get_heartbeat(conn, "sensor")
+        version = db.user_version(conn)
+    finally:
+        conn.close()
     info = ifaces.find(cfg.network.interface) if cfg.network.interface else None
 
     print(f"Batrade {__version__}  ·  {cfg.root}")
@@ -339,7 +346,6 @@ def cmd_doctor(cfg: Config, _args) -> int:
     print(f"  netlink vecinos : {'sí' if caps.netlink_neigh else 'NO'}   "
           f"scapy: {'sí' if caps.scapy else 'NO'}   "
           f"tshark: {'sí' if caps.tshark else 'NO'}")
-    version = db.user_version(conn)
     pendiente = "" if version == db.SCHEMA_VERSION else f" (pendiente v{db.SCHEMA_VERSION})"
     print(f"  base de datos   : {cfg.paths.db}  schema v{version}{pendiente}")
     print(f"  dispositivos    : {rows.get('total', 0)} "
@@ -493,9 +499,14 @@ def cmd_status(cfg: Config, _args) -> int:
 
 
 def cmd_init(cfg: Config, _args) -> int:
+    cfg.ensure_dirs()
     conn = db.initialize(cfg.paths.db)
-    gw = _init_meta(conn, cfg)
-    print(f"Base de datos lista en {cfg.paths.db}  ·  schema v{db.user_version(conn)}")
+    try:
+        gw = _init_meta(conn, cfg)
+        version = db.user_version(conn)
+    finally:
+        conn.close()
+    print(f"Base de datos lista en {cfg.paths.db}  ·  schema v{version}")
     print(f"Interfaz vigilada: {cfg.network.interface or '(ninguna)'}  ·  "
           f"subred {cfg.network.cidr}  ·  gateway {gw or 'sin definir'}")
     print(f"Directorio de escaneos: {cfg.paths.scans_dir}")
@@ -629,12 +640,18 @@ def cmd_reset_db(cfg: Config, args) -> int:
                 print(f"  aviso: no se pudo vaciar {cfg.paths.alerts_log.name}: {exc}",
                       file=sys.stderr)
         # Las copias rotadas del log de alertas también son artefactos de prueba.
-        for copia in sorted(cfg.paths.alerts_log.parent.glob(
+        try:
+            padre_alerts = cfg.paths.alerts_log.parent.resolve()
+        except OSError:
+            padre_alerts = None
+        for rotado in sorted(cfg.paths.alerts_log.parent.glob(
                 cfg.paths.alerts_log.name + ".*")):
             try:
-                if copia.is_symlink() or not copia.is_file():
+                if rotado.is_symlink() or not rotado.is_file():
                     continue
-                copia.unlink()
+                if padre_alerts is not None and rotado.parent.resolve() != padre_alerts:
+                    continue
+                rotado.unlink()
             except OSError:
                 continue
 
@@ -723,7 +740,10 @@ def cmd_approve(cfg: Config, args) -> int:
     from batrade.inventory import approve_baseline
 
     conn = db.initialize(cfg.paths.db)
-    result = approve_baseline(conn, include_random_mac=args.include_random_mac)
+    try:
+        result = approve_baseline(conn, include_random_mac=args.include_random_mac)
+    finally:
+        conn.close()
     print(f"Aprobados como confiables: {result['aprobados']}")
     print(f"Quedan en revisión        : {result['pendientes']}")
     return 0
@@ -731,19 +751,10 @@ def cmd_approve(cfg: Config, args) -> int:
 
 def cmd_export(cfg: Config, args) -> int:
     conn = db.connect(cfg.paths.db, readonly=True)
-    if args.what == "devices":
-        rows = [dict(r) for r in conn.execute(
-            "SELECT id, mac, ip_actual, fabricante, hostname, alias, estado_confianza, "
-            "mac_aleatoria, first_seen, last_seen, en_linea FROM devices ORDER BY id")]
-    elif args.what == "ports":
-        rows = [dict(r) for r in conn.execute(
-            "SELECT device_id, protocolo, puerto, estado, servicio, version, riesgoso, "
-            "first_seen, last_seen FROM ports ORDER BY device_id, puerto")]
-    else:
-        rows = [dict(r) for r in conn.execute(
-            "SELECT id, ts, severidad, tipo, ip_origen, mac_origen, ip_destino, "
-            "repeat_count, disposicion, notificado FROM events ORDER BY ts DESC")]
-    conn.close()
+    try:
+        rows = store.export_rows(conn, args.what)
+    finally:
+        conn.close()
 
     if args.format == "json":
         payload = json.dumps(rows, ensure_ascii=False, indent=2, default=str)

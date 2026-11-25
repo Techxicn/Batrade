@@ -11,7 +11,8 @@ from typing import Any
 from batrade import store
 from batrade.config import Config
 from batrade.detect.observation import Finding
-from batrade.net.iputil import is_locally_administered, normalize_mac, now_ms, valid_ipv4
+from batrade.net.iputil import (ip_in_cidr, is_locally_administered,
+                                normalize_mac, now_ms, valid_ipv4)
 from batrade.net.oui import OuiDB
 
 
@@ -77,11 +78,14 @@ class Inventory:
             seen_macs.add(mac_n)
             findings.extend(self.observe_host(ip, mac_n, ts, source="sweep"))
 
-        # Ausencias: sólo equipos que estaban en línea y no aparecieron.
-        rows = self.conn.execute("SELECT id FROM devices WHERE en_linea = 1").fetchall()
-        for row in rows:
-            device = store.get_device(self.conn, int(row["id"]))
+        # Ausencias: sólo equipos en línea pertenecientes a la subred vigilada
+        # (L-04: evita desconexiones espurias si la base conserva equipos de otra red).
+        for device_id in store.online_device_ids(self.conn):
+            device = store.get_device(self.conn, device_id)
             if device is None or device["mac"] in seen_macs:
+                continue
+            ip_actual = device["ip_actual"]
+            if ip_actual and not ip_in_cidr(ip_actual, self.cfg.network.cidr):
                 continue
             transition = store.register_miss(
                 self.conn, int(device["id"]), ts, self.cfg.sensor.presence_misses
@@ -182,11 +186,7 @@ def status(conn: sqlite3.Connection) -> dict[str, Any]:
 
 def review_candidates(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     """Equipos que no deberían aprobarse en lote (C7)."""
-    return list(conn.execute(
-        "SELECT * FROM devices WHERE estado_confianza = 'desconocido' "
-        "AND (mac_aleatoria = 1 OR hostname IS NULL OR fabricante IS NULL) "
-        "ORDER BY last_seen DESC"
-    ))
+    return store.review_candidate_devices(conn)
 
 
 def approve_baseline(conn: sqlite3.Connection, ts: int | None = None,
@@ -198,18 +198,12 @@ def approve_baseline(conn: sqlite3.Connection, ts: int | None = None,
     conectado al arrancar.
     """
     ts = ts or now_ms()
-    where = "" if include_random_mac else "AND mac_aleatoria = 0"
-    cur = conn.execute(
-        f"UPDATE devices SET estado_confianza = 'confiable' "
-        f"WHERE estado_confianza = 'desconocido' {where}"
+    confirmed, remaining = store.approve_unknown_devices(
+        conn, include_random_mac=include_random_mac
     )
-    confirmed = cur.rowcount
-    remaining = conn.execute(
-        "SELECT COUNT(*) AS n FROM devices WHERE estado_confianza = 'desconocido'"
-    ).fetchone()["n"]
     store.set_meta(conn, "learning_complete", "1", ts)
     store.set_meta(conn, "baseline_approved_ts", str(ts), ts)
-    return {"aprobados": confirmed, "pendientes": int(remaining)}
+    return {"aprobados": confirmed, "pendientes": remaining}
 
 
 def begin_learning(conn: sqlite3.Connection, ts: int | None = None) -> None:

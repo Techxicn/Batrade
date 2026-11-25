@@ -183,6 +183,36 @@ def test_no_backup_flag_skips_the_copy(cfg, seeded, as_root, sensor_parado):
     assert list(cfg.paths.db.parent.glob("*.bak-reset-*")) == []
 
 
+def test_rotated_alerts_do_not_shadow_backup_report(cfg, seeded, as_root,
+                                                    sensor_parado, monkeypatch,
+                                                    capsys, caplog):
+    monkeypatch.setattr(cli, "store_now", lambda: 1_760_000_000_000)
+    rot1 = cfg.paths.alerts_log.with_name(cfg.paths.alerts_log.name + ".1")
+    rot2 = cfg.paths.alerts_log.with_name(cfg.paths.alerts_log.name + ".2")
+    rot1.write_text("vieja 1\n", encoding="utf-8")
+    rot2.write_text("vieja 2\n", encoding="utf-8")
+
+    with caplog.at_level("INFO", logger="batrade.cli"):
+        assert cli.cmd_reset_db(cfg, _args()) == 0
+    salida = capsys.readouterr().out
+    assert not rot1.exists() and not rot2.exists()
+    assert "bak-reset-1760000000000" in salida
+    assert "copia         : alerts.log" not in salida
+    registro = [r for r in caplog.records if r.getMessage() == "reset-db"][-1]
+    assert registro.fields["backup"] == "test.db.bak-reset-1760000000000"
+
+    # Con --no-backup tampoco puede atribuir un rotado como si fuera la copia.
+    rot1.write_text("otra 1\n", encoding="utf-8")
+    caplog.clear()
+    with caplog.at_level("INFO", logger="batrade.cli"):
+        assert cli.cmd_reset_db(cfg, _args(no_backup=True)) == 0
+    salida_sin = capsys.readouterr().out
+    assert not rot1.exists()
+    assert "copia         :" not in salida_sin
+    registro_sin = [r for r in caplog.records if r.getMessage() == "reset-db"][-1]
+    assert registro_sin.fields["backup"] is None
+
+
 # --------------------------------------------------------------------------- #
 # Artefactos
 # --------------------------------------------------------------------------- #

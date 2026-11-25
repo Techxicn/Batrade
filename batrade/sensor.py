@@ -193,6 +193,7 @@ class Sensor:
         self._contadores = {"arp": 0, "syn": 0, "dhcp": 0, "neigh": 0}
         self.started_ts = now_ms()
         self.oui = OuiDB.load(cfg.paths.oui_file)
+        cfg.ensure_dirs()
         self.conn = db.initialize(cfg.paths.db)
         try:
             recovered = db.recover_interrupted(self.conn, now_ms())
@@ -231,8 +232,9 @@ class Sensor:
                 nombres.add(str(canal.get("chat_id_env") or "TELEGRAM_CHAT_ID"))
             elif tipo == "discord":
                 nombres.add(str(canal.get("webhook_env") or "DISCORD_WEBHOOK"))
-        return {nombre: os.environ[nombre] for nombre in sorted(nombres)
-                if os.environ.get(nombre)}
+        fuente = {**self.cfg.secrets, **os.environ}
+        return {nombre: fuente[nombre] for nombre in sorted(nombres)
+                if fuente.get(nombre)}
 
     def _load_baseline(self) -> Baseline:
         b = Baseline()
@@ -818,9 +820,7 @@ class Sensor:
         if device_id is None:
             return
         if result.hostnames:
-            host = result.hostnames[0]
-            conn.execute("UPDATE devices SET hostname = COALESCE(hostname, ?) WHERE id = ?",
-                         (host[:63], device_id))
+            store.set_device_hostname_if_missing(conn, device_id, result.hostnames[0])
         diff = store.apply_scan_ports(conn, device_id, result.ports, now_ms(),
                                       self.cfg.scan.risky_ports,
                                       protocolos=result.protocols,
