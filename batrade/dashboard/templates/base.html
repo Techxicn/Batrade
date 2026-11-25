@@ -13,8 +13,8 @@
       data-live-url="{{ url_for('api_live') }}"
       data-events-url="{{ url_for('events') }}"{% endif %}>
 <header class="topbar">
-  <a class="brand" href="{{ url_for('index') }}">
-    <span class="logo"></span> Batrade <em>Home-SOC</em>
+  <a class="brand" href="{{ url_for('index') }}" aria-label="Batrade Home-SOC, ir al panel">
+    <span class="brand-prompt" aria-hidden="true">&gt;</span>batrade<span class="brand-host">@home-soc</span><span class="brand-cursor" aria-hidden="true"></span>
   </a>
   <nav class="nav">
     <a href="{{ url_for('index') }}" class="{% if request.endpoint == 'index' %}on{% endif %}">Panel</a>
@@ -28,7 +28,14 @@
     <button type="button" class="live-toggle" id="live-toggle" aria-pressed="false"
             title="Activar sonido y notificaciones de alertas">Avisos: off</button>
     <details class="live-prefs">
-      <summary title="Preferencias de avisos" aria-label="Preferencias de avisos">⚙</summary>
+      <summary title="Preferencias de avisos" aria-label="Preferencias de avisos">
+        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+             stroke-width="2" stroke-linecap="square" aria-hidden="true" focusable="false">
+          <path d="M4 6h10M18 6h2M4 12h4M12 12h8M4 18h12"/>
+          <rect x="14" y="4" width="4" height="4"/><rect x="8" y="10" width="4" height="4"/>
+          <rect x="16" y="16" width="4" height="4"/>
+        </svg>
+      </summary>
       <div class="live-prefs-body">
         <label><input type="checkbox" id="live-pref-sound" checked> Sonido</label>
         <label><input type="checkbox" id="live-pref-notify" checked> Notificaciones del navegador</label>

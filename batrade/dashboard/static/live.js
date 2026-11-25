@@ -134,6 +134,7 @@
     // Contadores y latido se refrescan en cualquier página, también al abrir.
     actualizarContadores(datos.resumen);
     actualizarLatido(datos.sensor);
+    texto("[data-live='actualizado']", "actualizado " + horaLocal());
 
     var nuevos = [];
     for (var i = 0; i < eventos.length; i++) {
@@ -219,7 +220,7 @@
     cerrar.type = "button";
     cerrar.className = "live-alert-close";
     cerrar.setAttribute("aria-label", "Cerrar aviso");
-    cerrar.textContent = "×";
+    cerrar.textContent = "[x]";
     cerrar.addEventListener("click", function () {
       if (el.parentNode) el.parentNode.removeChild(el);
     });
@@ -271,21 +272,67 @@
     el.classList.toggle(clase, Number(valor) > 0);
   }
 
+  // Singular y plural de la leyenda de la barra de severidad.
+  var PLURALES = {
+    crit: ["crítica", "críticas"],
+    warn: ["advertencia", "advertencias"],
+    info: ["informativa", "informativas"],
+    fp: ["falso positivo", "falsos positivos"]
+  };
+
+  function plural(cantidad, clave) {
+    var formas = PLURALES[clave];
+    return cantidad === 1 ? formas[0] : formas[1];
+  }
+
+  // Barra de severidad de hoy: cada tramo crece en proporción a su recuento
+  // (flex-grow) y se oculta si vale 0; sin eventos queda la pista vacía.
+  function actualizarBarra(alertas) {
+    var claves = ["crit", "warn", "info"];
+    var partes = [];
+    var suma = 0;
+    for (var i = 0; i < claves.length; i++) {
+      var clave = claves[i];
+      var cantidad = Number(alertas[clave]) || 0;
+      suma += cantidad;
+      var tramo = document.querySelector("[data-live-seg='" + clave + "']");
+      if (tramo) {
+        tramo.style.flexGrow = String(cantidad);
+        tramo.hidden = cantidad === 0;
+      }
+      texto("[data-live='alertas-" + clave + "']", cantidad);
+      texto("[data-live='alertas-" + clave + "-label']", plural(cantidad, clave));
+      partes.push(cantidad + " " + plural(cantidad, clave));
+    }
+    var vacio = document.querySelector("[data-live-seg='vacio']");
+    if (vacio) vacio.hidden = suma > 0;
+    var pista = document.querySelector("[data-live='alertas-barra']");
+    if (pista) pista.setAttribute("aria-label", partes.join(", "));
+    texto("[data-live='alertas-total']", Number(alertas.total) || suma);
+  }
+
   function actualizarContadores(resumen) {
     if (!resumen || typeof resumen !== "object") return;
     var alertas = resumen.alertas_hoy || {};
+    var falsos = Number(resumen.fp_hoy) || 0;
     texto("[data-live='en-linea']", Number(resumen.en_linea) || 0);
     texto("[data-live='total']", "de " + (Number(resumen.dispositivos) || 0) + " conocidos");
     texto("[data-live='desconocidos']", Number(resumen.desconocidos) || 0);
     texto("[data-live='no-autorizados']", Number(resumen.no_autorizados) || 0);
-    texto("[data-live='alertas-crit']", Number(alertas.crit) || 0);
-    texto("[data-live='alertas-sub']", (Number(alertas.warn) || 0) + " advertencias · " +
-      (Number(alertas.info) || 0) + " info");
-    texto("[data-live='fp']", Number(resumen.fp_hoy) || 0);
-    texto("[data-live='fp-sub']", "de " + (Number(alertas.total) || 0) + " eventos");
+    actualizarBarra(alertas);
+    texto("[data-live='fp']", falsos);
+    texto("[data-live='fp-sub']", plural(falsos, "fp"));
     color("[data-live='desconocidos']", resumen.desconocidos, "warn-text");
     color("[data-live='no-autorizados']", resumen.no_autorizados, "crit-text");
-    color("[data-live='alertas-crit']", alertas.crit, "crit-text");
+  }
+
+  function horaLocal() {
+    var ahora = new Date();
+    try {
+      return ahora.toLocaleTimeString("es-ES", { hour12: false });
+    } catch (error) {
+      return ahora.toTimeString().slice(0, 8);
+    }
   }
 
   function actualizarLatido(sensor) {
