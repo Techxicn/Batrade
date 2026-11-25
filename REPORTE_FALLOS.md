@@ -43,8 +43,25 @@ se reescriben. Lo que sigue es el estado verificado hoy contra el árbol actual
 | D-01 | `_guard` cierra la conexión del hilo en `finally` (`_close_thread_conn`) | `sensor.py:346-361` |
 | D-02 | `BEGIN IMMEDIATE` + `ROLLBACK` en `BaseException`, con test de migración mixta DDL+DML | `db.py:319-327`, `tests/test_migrations.py` |
 | D-03 | `Sensor.__init__` cierra la conexión si falla a mitad de construcción | `sensor.py` |
-| M-02 | `_human_age` ya no existe: la edad se calcula en la plantilla/JS | dashboard |
+| D-04 | `load_config` ya no llama a `ensure_dirs()`; la creación de directorios vive en los puntos de entrada (`cli`, `Sensor`, `create_app`, `demo`) | `config.py`, `cli.py`, `sensor.py`, `dashboard/app.py`, `demo.py`, `tests/test_config.py` |
+| S-02 | `load_dotenv` no escribe en `os.environ`; los secretos viajan en `Config.secrets` (`repr=False`) hacia `Sensor._env()`, `DASHBOARD_TOKEN` y `redact.secretos_conocidos` | `config.py`, `sensor.py`, `redact.py`, `logging_setup.py`, `notify.py`, `tests/test_config.py` |
+| L-04 | `apply_sweep` sólo acumula ausencias para equipos cuya `ip_actual` pertenece a `network.cidr` | `inventory.py`, `tests/test_inventory.py` |
+| M-02 | `_human_age`, `_fmt_ago` y `_fmt_ts` comprueban `ms is None` en vez de `not ms`, tratando `0` como epoch válido | `dashboard/app.py`, `tests/test_panel_hardening.py` |
+| M-03 | `/devices` pide `DEVICES_LIMIT + 1` y muestra un banner de aviso si el inventario queda truncado | `dashboard/app.py`, `dashboard/templates/devices.html`, `tests/test_panel_hardening.py` |
+| M-04 | `parse_xml` sólo retira el `<!DOCTYPE nombre>` simple de nmap y usa `defusedxml(..., forbid_dtd=True)`, bloqueando subconjuntos internos y DTD externos | `net/nmap_scan.py`, `tests/test_parsers.py` |
 | M-05 | `Sensor._env()` pasa sólo las variables que declara cada canal | `sensor.py:216-230` |
+
+### Endurecimiento adicional (post-fase 6)
+
+| Tema | Qué se corrigió | Dónde |
+|------|-----------------|-------|
+| BPF con motor de flujos | `sniff_observations` aplica `FLOW_FILTER` (`arp or (ip and (tcp or udp))`) cuando hay `on_packet`, y `observation_from_packet` descarta TCP sin flag `S` para no inflar observaciones de reglas | `detect/sniffer.py`, `detect/scenarios.py`, `tests/test_sniffer.py` |
+| `reset-db` con logs rotados | El bucle de limpieza de `alerts.log.*` ya no sobrescribe `copia` (ruta del backup `.bak-reset-*`) | `cli.py`, `tests/test_reset_db.py` |
+| `FlowEngine.emitted` acotada | Con `on_finding` no acumula copias en memoria; sin callback queda acotada a `EMITTED_MAX` | `flow/engine.py`, `tests/test_flow.py` |
+| Panel web: Open Redirect y login CSRF | `_safe_redirect` valida `next`, `back` y `Referer`; `POST /login` exige CSRF e incluye el campo en `login.html` | `dashboard/app.py`, `dashboard/templates/login.html`, `tests/test_panel_hardening.py` |
+| Redacción de `DASHBOARD_TOKEN` | Añadido a `VARIABLES_DE_CANAL` para que `redactar()` y los logs también lo tapen | `redact.py`, `tests/test_secrets.py` |
+| Invariante SQL y cierre de conexiones | Todas las consultas SQL viven en `store.py`/`db.py` (verificado por test AST); `cmd_doctor`, `cmd_init`, `cmd_approve` y `cmd_export` cierran `conn` en `finally` | `store.py`, `cli.py`, `dashboard/app.py`, `inventory.py`, `sensor.py`, `demo.py`, `tests/test_project_metadata.py` |
+| Docstring `_kmeans` | Alineado con su inicialización aleatoria uniforme (`rng.choice`) | `flow/scorer.py` |
 
 ### Mitigados o parciales
 
@@ -52,7 +69,6 @@ se reescriben. Lo que sigue es el estado verificado hoy contra el árbol actual
 |----|--------|
 | R-04 | No reintenta netlink, pero `run()` degrada a sondeo TCP si el socket cae: la vigilancia no se queda muerta (`neigh.py:198-215`). |
 | S-03 | Sigue siendo un Flask de desarrollo **a propósito**. Ahora el arranque fuera de loopback sin `DASHBOARD_TOKEN` se rechaza en config y en `--host`, y el acceso remoto es túnel SSH o proxy TLS con token (README, D-03). |
-| M-03 | `list_devices` acepta `limit` (antes 500 fijo), pero el panel no lo expone ni avisa del truncado. |
 
 ### Abiertos por decisión
 
@@ -61,16 +77,7 @@ se reescriben. Lo que sigue es el estado verificado hoy contra el árbol actual
 | R-02 | `except Exception` en `_scan_worker`: se deja como está; el worker debe sobrevivir a cualquier fallo. |
 | S-04 | El token CSRF no rota: aceptado, no se cambia. |
 | L-01 | `ArpBindingRule` no actualiza `prev.mac` del gateway: aceptado. |
-
-### Abiertos sin decisión
-
-| ID | Estado |
-|----|--------|
-| S-02 | `load_dotenv` sigue haciendo `os.environ.setdefault` para cada clave del `.env`. |
-| D-04 | `load_config` sigue llamando `ensure_dirs()` como efecto secundario de validar. |
-| M-01 | `format_text` no sanea `detalle_json`; Telegram sí escapa el HTML y el log local va con permisos 600. |
-| M-04 | El DOCTYPE se elimina con una regex antes de `defusedxml`; sigue sin cubrir subconjuntos internos (`<!DOCTYPE x [ ... ]>`). |
-| L-04 | `apply_sweep` sigue consultando `en_linea = 1` sin filtrar por interfaz; con una instancia por VLAN (D-04) el escenario se reduce a una sola subred. |
+| M-01 | `format_text` es texto plano (permisos 600 en `alerts.log`) y `format_telegram` escapa HTML con `html.escape`; no requiere cambio de código. |
 
 ### Corrección del análisis
 

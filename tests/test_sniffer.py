@@ -12,7 +12,8 @@ from scapy.all import BOOTP, DHCP as ScapyDHCP, Ether, IP, TCP, UDP  # noqa: E40
 
 from batrade.detect.observation import ARP, DHCP, SYN  # noqa: E402
 from batrade.detect.scenarios import observation_from_packet  # noqa: E402
-from batrade.detect.sniffer import sniff_observations  # noqa: E402
+from batrade.detect.sniffer import (DEFAULT_FILTER, FLOW_FILTER,  # noqa: E402
+                                    sniff_observations)
 
 
 def _de_cable(paquete):
@@ -82,8 +83,61 @@ def test_sniff_no_pierde_el_bpf_por_defecto(monkeypatch):
     monkeypatch.setattr("scapy.all.sniff", falso_sniff)
     sniff_observations("sp0", lambda _obs: None, stop)
 
-    assert llamadas[0]["filter"] == (
-        "arp or udp port 67 or udp port 68 or (tcp and tcp[tcpflags] & tcp-syn != 0)")
+    assert llamadas[0]["filter"] == DEFAULT_FILTER
+
+
+def test_sniff_usa_flow_filter_cuando_hay_on_packet(monkeypatch):
+    llamadas: list[dict] = []
+    stop = threading.Event()
+
+    def falso_sniff(**kwargs):
+        llamadas.append(kwargs)
+        stop.set()
+
+    monkeypatch.setattr("scapy.all.sniff", falso_sniff)
+    sniff_observations("sp0", lambda _obs: None, stop,
+                       on_packet=lambda _pkt, _ts: None)
+    assert llamadas[0]["filter"] == FLOW_FILTER
+
+    # Un BPF explícito siempre gana, incluso con on_packet activo.
+    llamadas.clear()
+    stop.clear()
+    sniff_observations("sp0", lambda _obs: None, stop, bpf="arp",
+                       on_packet=lambda _pkt, _ts: None)
+    assert llamadas[0]["filter"] == "arp"
+
+
+def test_observation_from_packet_ignora_tcp_sin_syn_y_udp_no_dhcp(monkeypatch):
+    ack = _de_cable(
+        Ether(src="aa:bb:cc:00:11:22", dst="3c:22:fb:11:22:33") /
+        IP(src="10.10.10.99", dst="10.10.10.50") /
+        TCP(sport=40000, dport=443, flags="PA")
+    )
+    dns = _de_cable(
+        Ether(src="aa:bb:cc:00:11:22", dst="3c:22:fb:11:22:33") /
+        IP(src="10.10.10.99", dst="10.10.10.1") /
+        UDP(sport=51000, dport=53)
+    )
+    assert observation_from_packet(ack, 1000, iface="sp0") is None
+    assert observation_from_packet(dns, 1000, iface="sp0") is None
+
+    # En vivo con on_packet, el paquete crudo sí llega al motor de flujos
+    # aunque no genere observación de reglas.
+    crudos = []
+    observaciones = []
+    stop = threading.Event()
+
+    def falso_sniff(**kwargs):
+        kwargs["prn"](ack)
+        kwargs["prn"](dns)
+        stop.set()
+
+    monkeypatch.setattr("scapy.all.sniff", falso_sniff)
+    sniff_observations("sp0", observaciones.append, stop,
+                       on_packet=lambda pkt, ts: crudos.append((pkt, ts)))
+
+    assert len(crudos) == 2
+    assert observaciones == []
 
 
 # --------------------------------------------------------------------------- #

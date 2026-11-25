@@ -81,6 +81,23 @@ def test_sweep_marks_absent_devices_offline(conn, cfg, oui):
     assert "device_offline" in [f.tipo for f in findings]
 
 
+def test_sweep_ignores_online_devices_from_other_subnet(conn, cfg, oui):
+    """L-04: un equipo de otra subred no recibe misses ni device_offline."""
+    inv = Inventory(conn, cfg, oui, learning=False)
+    inv.observe_host("10.10.10.50", NORMAL, 1000)
+    inv.observe_host("192.168.99.20", "00:1a:2b:00:00:99", 1000)
+
+    seen = {"10.10.10.50": NORMAL}
+    all_findings = []
+    for i in range(cfg.sensor.presence_misses + 1):
+        all_findings.extend(inv.apply_sweep(seen, 2000 + i))
+
+    ajeno = store.get_device_by_mac(conn, "00:1a:2b:00:00:99")
+    assert ajeno["en_linea"] == 1
+    assert ajeno["misses"] == 0
+    assert "device_offline" not in [f.tipo for f in all_findings]
+
+
 def test_approve_baseline_keeps_random_macs_for_review(conn, cfg, oui):
     inv = Inventory(conn, cfg, oui, learning=True)
     inv.observe_host("10.10.10.50", NORMAL, 1000)

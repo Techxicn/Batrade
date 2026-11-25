@@ -254,11 +254,17 @@ def observation_from_packet(pkt, ts: int, iface: str | None = None,
         return None
     if pkt.haslayer(TCP) and pkt.haslayer(IP):
         tcp = pkt[TCP]
+        flags = str(tcp.flags)
+        # Sólo los paquetes con SYN interesan al motor de reglas; cuando el
+        # sniffer captura TCP completo para el motor de flujos, el resto de
+        # paquetes (ACK, PSH, FIN, RST) no debe inflar las observaciones SYN.
+        if "S" not in flags:
+            return None
         return Observation(
             kind=SYN, ts=ts, iface=iface, ip_src=pkt[IP].src,
             mac_src=normalize_mac(pkt.src),
             ip_dst=pkt[IP].dst, port_dst=int(tcp.dport),
-            extra={"flags": str(tcp.flags)},
+            extra={"flags": flags},
             direction=direction,
         )
     return None

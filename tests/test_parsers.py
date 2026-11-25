@@ -37,6 +37,8 @@ def test_parse_open_ports_and_hostnames(tmp_path):
 
 
 def test_entity_injection_is_blocked(tmp_path):
+    from defusedxml.common import DTDForbidden
+
     malicious = (
         '<?xml version="1.0"?>'
         '<!DOCTYPE foo [<!ENTITY xxe SYSTEM "file:///etc/passwd">]>'
@@ -44,7 +46,21 @@ def test_entity_injection_is_blocked(tmp_path):
     )
     path = tmp_path / "evil.xml"
     path.write_text(malicious)
-    with pytest.raises(Exception):
+    with pytest.raises(DTDForbidden):
+        parse_xml(path)
+
+
+@pytest.mark.parametrize("doctype", [
+    '<!DOCTYPE nmaprun [<!ELEMENT nmaprun EMPTY>]>',
+    '<!DOCTYPE nmaprun SYSTEM "http://example.invalid/nmap.dtd">',
+])
+def test_doctype_internal_subset_or_external_dtd_is_blocked(tmp_path, doctype):
+    """M-04: sólo se acepta el DOCTYPE simple de nmap, nunca subconjuntos ni DTD externos."""
+    from defusedxml.common import DTDForbidden
+
+    path = tmp_path / "dtd.xml"
+    path.write_text(f'<?xml version="1.0"?>{doctype}<nmaprun/>')
+    with pytest.raises(DTDForbidden):
         parse_xml(path)
 
 

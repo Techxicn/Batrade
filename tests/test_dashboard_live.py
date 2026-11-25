@@ -71,7 +71,9 @@ def test_api_live_exige_sesion_y_no_filtra_datos(cfg):
     assert "live.js" not in acceso
     assert "data-live-url" not in acceso
 
-    assert client.post("/login", data={"token": "s3cret"}).status_code == 302
+    with client.session_transaction() as session:
+        csrf = session["csrf"]
+    assert client.post("/login", data={"csrf": csrf, "token": "s3cret"}).status_code == 302
     assert client.get("/api/live").status_code == 200
 
 

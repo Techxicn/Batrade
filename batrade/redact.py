@@ -8,6 +8,7 @@ antes de que el texto llegue al log, a ``notification_queue.last_error``, a
 """
 from __future__ import annotations
 
+from collections.abc import Mapping
 import os
 import re
 
@@ -23,14 +24,22 @@ _WEBHOOK_DISCORD = re.compile(
 # Resto de la ruta del bot: /bot<token>/sendMessage entero.
 _RUTA_BOT = re.compile(r"/bot[^\s'\"<>]*")
 
-# Variables de entorno que pueden llevar un secreto de canal.
-VARIABLES_DE_CANAL = ("TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID", "DISCORD_WEBHOOK")
+# Variables de entorno que pueden llevar secretos de canal o de acceso al panel.
+VARIABLES_DE_CANAL = ("TELEGRAM_TOKEN", "TELEGRAM_CHAT_ID", "DISCORD_WEBHOOK",
+                      "DASHBOARD_TOKEN")
 
 
-def secretos_conocidos() -> tuple[str, ...]:
-    """Valores no vacíos de las variables de canal del proceso."""
-    valores = (os.environ.get(nombre, "") for nombre in VARIABLES_DE_CANAL)
-    return tuple(valor for valor in valores if len(valor) >= 8)
+def secretos_conocidos(extra: Mapping[str, str] | None = None) -> tuple[str, ...]:
+    """Valores no vacíos de las variables sensibles del proceso y de ``extra``."""
+    fuente: dict[str, str] = {**dict(extra or {}), **os.environ}
+    valores = [fuente.get(nombre, "") for nombre in VARIABLES_DE_CANAL]
+    if extra:
+        valores.extend(extra.values())
+    vistos: dict[str, None] = {}
+    for valor in valores:
+        if len(valor) >= 8:
+            vistos[valor] = None
+    return tuple(vistos)
 
 
 def redactar(texto: object, secretos: tuple[str, ...] | None = None) -> str:
@@ -40,10 +49,11 @@ def redactar(texto: object, secretos: tuple[str, ...] | None = None) -> str:
     logging, que la calcula una vez); si es ``None`` se leen del entorno.
     """
     salida = str(texto)
+    # Primero las URLs completas: si se sustituye antes un token por `<redactado>`,
+    # los signos `<`/`>` cortan el patrón `/bot...` y dejan expuesta la ruta.
+    salida = _WEBHOOK_DISCORD.sub(f"https://discord.com/api/webhooks/{MARCA}", salida)
+    salida = _RUTA_BOT.sub("/bot" + MARCA, salida)
     for valor in (secretos if secretos is not None else secretos_conocidos()):
         salida = salida.replace(valor, MARCA)
-    salida = _WEBHOOK_DISCORD.sub(f"https://discord.com/api/webhooks/{MARCA}", salida)
-    # La ruta del bot se tapa entera (token incluido) antes que el token suelto.
-    salida = _RUTA_BOT.sub("/bot" + MARCA, salida)
     salida = _TOKEN_TELEGRAM.sub(MARCA, salida)
     return salida

@@ -5,6 +5,7 @@
   <header class="card-head"><h2>Acceso al panel</h2></header>
   <p class="muted">Este panel está protegido con un token porque escucha fuera de loopback.</p>
   <form method="post">
+    <input type="hidden" name="csrf" value="{{ csrf }}">
     <label>Token
       <input type="password" name="token" autofocus required>
     </label>

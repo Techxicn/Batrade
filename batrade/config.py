@@ -8,6 +8,7 @@ from __future__ import annotations
 import ipaddress
 import logging
 import os
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -155,6 +156,8 @@ class Config:
     # True si network.capture_interface venía en el YAML (no resuelta por defecto).
     capture_explicit: bool = False
     warnings: list[str] = field(default_factory=list)
+    # Secretos cargados desde .env sin contaminar os.environ (S-02).
+    secrets: dict[str, str] = field(default_factory=dict, repr=False)
 
     @property
     def network_obj(self) -> ipaddress.IPv4Network:
@@ -170,7 +173,7 @@ class Config:
 # .env
 # --------------------------------------------------------------------------- #
 def load_dotenv(path: Path) -> dict[str, str]:
-    """Parser mínimo de .env. No sobreescribe variables ya presentes en el entorno.
+    """Parser mínimo de .env. Devuelve los pares sin escribir en ``os.environ`` (S-02).
 
     Un `.env` ilegible no puede tumbar el arranque: en una instalación systemd
     el fichero puede pertenecer a otro usuario. Se avisa y se sigue sin él.
@@ -193,7 +196,6 @@ def load_dotenv(path: Path) -> dict[str, str]:
         if not key:
             continue
         values[key] = val
-        os.environ.setdefault(key, val)
     return values
 
 
@@ -287,8 +289,15 @@ def validar_host_expuesto(host: str, token: str | None) -> str | None:
             "definir DASHBOARD_TOKEN en .env (RNF-05)")
 
 
-def load_config(path: str | Path = "config.yaml", root: str | Path | None = None) -> Config:
-    """Carga config.yaml y valida todo lo que puede romper el arranque."""
+def load_config(path: str | Path = "config.yaml",
+                root: str | Path | None = None, *,
+                env: Mapping[str, str] | None = None) -> Config:
+    """Carga config.yaml y valida todo lo que puede romper el arranque.
+
+    No crea directorios en disco (D-04): los puntos de entrada que escriben
+    estado llaman a ``cfg.ensure_dirs()``. ``env`` recibe los pares leídos de
+    ``.env``; las variables ya presentes en ``os.environ`` tienen prioridad.
+    """
     cfg_path = Path(path)
     if not cfg_path.is_absolute():
         cfg_path = Path(root or Path.cwd()) / cfg_path
@@ -482,10 +491,11 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
         local_backups=int(_get(not_raw, "local_backups", 3)),
     )
     token_env = str(_get(dash_raw, "auth_token_env", "DASHBOARD_TOKEN"))
+    dotenv = dict(env or {})
     dashboard = DashboardCfg(
         host=str(_get(dash_raw, "host", "127.0.0.1")),
         port=int(_get(dash_raw, "port", 8000)),
-        auth_token=os.environ.get(token_env) or None,
+        auth_token=os.environ.get(token_env) or dotenv.get(token_env) or None,
         live_poll_s=int(_get(dash_raw, "live_poll_s", 3)),
     )
 
@@ -597,13 +607,13 @@ def load_config(path: str | Path = "config.yaml", root: str | Path | None = None
                  detect=detect, flow=flow, notify=notify, dashboard=dashboard,
                  paths=paths,
                  interface_auto=interface_auto, cidr_auto=cidr_auto,
-                 capture_explicit=capture_explicit, warnings=warnings)
-    cfg.ensure_dirs()
+                 capture_explicit=capture_explicit, warnings=warnings,
+                 secrets=dotenv)
     return cfg
 
 
 def load(config_path: str = "config.yaml", root: str | Path | None = None) -> Config:
-    """Carga .env y después config.yaml."""
+    """Carga .env (sin modificar ``os.environ``) y después config.yaml."""
     base = Path(root or Path.cwd())
-    load_dotenv(base / ".env")
-    return load_config(config_path, base)
+    dotenv = load_dotenv(base / ".env")
+    return load_config(config_path, base, env=dotenv)
