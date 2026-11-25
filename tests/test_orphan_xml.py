@@ -4,7 +4,7 @@ from __future__ import annotations
 import os
 import time
 
-from batrade import db, store
+from batrade import store
 from batrade.sensor import purge_orphan_xml
 
 

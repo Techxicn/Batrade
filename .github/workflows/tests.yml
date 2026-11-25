@@ -7,6 +7,23 @@ on:
   pull_request:
 
 jobs:
+  lint:
+    name: ruff (lint)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Preparar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Instalar ruff
+        run: python -m pip install --upgrade pip ruff
+
+      - name: Ejecutar ruff check
+        run: ruff check batrade tests scripts
+
   pytest:
     name: pytest (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest

@@ -24,13 +24,16 @@ def _pyproject() -> dict:
 def test_dev_extra_installs_pytest():
     extras = _pyproject()["project"]["optional-dependencies"]
     assert "dev" in extras
-    assert any(dep.split(">=")[0].strip() == "pytest" for dep in extras["dev"])
+    nombres = {dep.split(">=")[0].strip() for dep in extras["dev"]}
+    assert "pytest" in nombres
+    assert "ruff" in nombres
 
 
 def test_runtime_dependencies_are_declared():
     deps = " ".join(_pyproject()["project"]["dependencies"]).lower()
-    for paquete in ("pyyaml", "flask", "requests", "defusedxml", "scapy"):
+    for paquete in ("pyyaml", "flask", "defusedxml", "scapy"):
         assert paquete in deps
+    assert "requests" not in deps
 
 
 def test_workflow_is_valid_yaml_and_runs_pytest():

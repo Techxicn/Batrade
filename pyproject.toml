@@ -12,13 +12,12 @@ requires-python = ">=3.11"
 dependencies = [
     "PyYAML>=6.0",
     "Flask>=3.0",
-    "requests>=2.28",
     "defusedxml>=0.7",
     "scapy>=2.5",
 ]
 
 [project.optional-dependencies]
-dev = ["pytest>=8"]
+dev = ["pytest>=8", "ruff>=0.8"]
 # Extra opcional para el motor de flujos (Isolation Forest). Sin él, el scoring
 # usa DummyScorer y el motor no emite nada.
 ml = ["numpy>=1.26"]
@@ -35,6 +34,13 @@ batrade = [
     "dashboard/static/*.css",
     "dashboard/static/*.js",
 ]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "B"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]
