@@ -36,6 +36,7 @@
     <tbody id="events-tbody" data-csrf="{{ csrf }}"
            data-sev="{{ filtro.severidad }}" data-tipo="{{ filtro.tipo }}">
     {% for e in events %}
+      {% set oid = (origenes|default({})).get(e['id']) %}
       <tr data-evento-id="{{ e['id'] }}">
         <td><span class="chip {{ e['severidad'] }}">{{ sev_label[e['severidad']] }}</span></td>
         <td>
@@ -52,7 +53,7 @@
             </div>
           </details>
         </td>
-        <td class="mono small">{{ e["ip_origen"] or "—" }}<br>{{ e["mac_origen"] or "" }}</td>
+        <td class="mono small" data-origen data-ip="{{ e['ip_origen'] or '' }}"{% if oid %} data-device-id="{{ oid }}"{% endif %}>{{ e["ip_origen"] or "—" }}<br>{{ e["mac_origen"] or "" }}</td>
         <td class="mono small">{{ e["ip_destino"] or "—" }}</td>
         <td title="{{ e['last_ts']|ts }}">{{ e["last_ts"]|ago }}</td>
         <td class="mono">{{ e["repeat_count"] }}</td>

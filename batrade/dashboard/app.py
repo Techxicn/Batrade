@@ -147,6 +147,49 @@ def _live_event(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+# --------------------------------------------------------------------------- #
+# Enlaces del origen al equipo: la tabla de alertas muestra ip/mac y el panel
+# necesita saber a qué /devices/<id> llevan. Es una lectura del inventario,
+# no un cambio de esquema: la tabla de eventos no guarda device_id.
+# --------------------------------------------------------------------------- #
+def _origen_device_id(conn: sqlite3.Connection, ip: str | None, mac: str | None,
+                      cache: dict[tuple[str, str], int | None]) -> int | None:
+    """``devices.id`` del origen de un evento, o ``None`` si no está fichado.
+
+    La MAC manda porque es la identidad del equipo (``devices.mac`` es única),
+    igual que en ``store.events_for_device``. Sin MAC se cae a la IP actual,
+    que es lo que la tabla muestra; si esa IP ya no es de ningún equipo, el
+    origen se queda como texto en vez de enlazar a un dispositivo equivocado.
+    """
+    clave = (mac or "", ip or "")
+    if clave in cache:
+        return cache[clave]
+    device_id = None
+    if mac:
+        for candidata in (mac, mac.lower()):
+            row = store.get_device_by_mac(conn, candidata)
+            if row is not None:
+                device_id = int(row["id"])
+                break
+    if device_id is None and ip:
+        row = store.get_device_by_ip(conn, ip)
+        if row is not None:
+            device_id = int(row["id"])
+    cache[clave] = device_id
+    return device_id
+
+
+def _origenes(conn: sqlite3.Connection, rows) -> dict[int, int]:
+    """``{event_id: device_id}`` de los eventos cuyo origen sí está fichado."""
+    cache: dict[tuple[str, str], int | None] = {}
+    mapa: dict[int, int] = {}
+    for row in rows:
+        device_id = _origen_device_id(conn, row["ip_origen"], row["mac_origen"], cache)
+        if device_id is not None:
+            mapa[int(row["id"])] = device_id
+    return mapa
+
+
 def _safe_redirect(target: str | None, fallback: str, *,
                    allow_same_origin: bool = False) -> str:
     """Valida que una redirección permanezca dentro del propio panel.
@@ -330,6 +373,7 @@ def create_app(cfg: Config) -> Flask:
         fp_today = store.false_positives_since(conn, since)
         return render_template(
             "index.html", counts=counts, sev=sev, recent=recent, base=base,
+            origenes=_origenes(conn, recent),
             total_today=total_today, fp_today=int(fp_today),
             health=_health(conn), caps=caps.summary(), mode_notes=mode_notes,
             generado=now_ms(),
@@ -398,6 +442,7 @@ def create_app(cfg: Config) -> Flask:
         rows = store.list_events(conn, severidad=severidad, tipo=tipo, limit=300)
         tipos = store.list_event_types(conn)
         return render_template("events.html", events=rows, tipos=tipos,
+                               origenes=_origenes(conn, rows),
                                filtro={"severidad": severidad or "", "tipo": tipo or ""})
 
     @app.route("/events/<int:event_id>/disposicion", methods=["POST"])
@@ -427,6 +472,8 @@ def create_app(cfg: Config) -> Flask:
 
         ``max_id`` se lee **antes** que los eventos para que el cursor del
         cliente nunca pueda saltarse una fila insertada mientras se responde.
+        Cada evento lleva ``device_id`` (o ``null``) para que la fila que el
+        cliente inserta en /events enlace al equipo del origen.
         """
         conn = get_db()
         payload: dict[str, Any] = {"max_id": store.max_event_id(conn)}
@@ -438,10 +485,16 @@ def create_app(cfg: Config) -> Flask:
                 return _json_response({"error": "after debe ser un entero"}, 400)
             if after < 0:
                 return _json_response({"error": "after no puede ser negativo"}, 400)
-            payload["eventos"] = [
-                _live_event(row)
-                for row in store.events_since(conn, after, limit=store.LIVE_MAX_EVENTS)
-            ]
+            cache: dict[tuple[str, str], int | None] = {}
+            eventos = []
+            for row in store.events_since(conn, after, limit=store.LIVE_MAX_EVENTS):
+                evento = _live_event(row)
+                # Mismo criterio que la tabla: el panel en vivo necesita el id
+                # para enlazar la fila recién insertada al dispositivo.
+                evento["device_id"] = _origen_device_id(
+                    conn, evento["ip_origen"], evento["mac_origen"], cache)
+                eventos.append(evento)
+            payload["eventos"] = eventos
         payload["resumen"] = store.live_summary(conn, _start_of_today_ms())
         health = _health(conn)
         payload["sensor"] = {

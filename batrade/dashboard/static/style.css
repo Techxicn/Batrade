@@ -321,6 +321,11 @@ h1 + p, .page-head p { margin: 2px 0 0; }
 .table a:hover { color: var(--accent); }
 .table small { color: var(--faint); }
 
+/* Origen enlazado al equipo: la celda entera es el enlace, con el subrayado
+   punteado de .table a y el acento del tema al pasar el ratón. */
+.table .origen-link { display: inline-block; }
+.table .origen-link:hover small { color: var(--accent); }
+
 .repeat { color: var(--warn); font-size: 12px; font-weight: 700; margin-left: 6px; }
 
 /* ---------------------------------------------------------------- chips */

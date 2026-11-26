@@ -374,6 +374,31 @@
     var vacio = document.getElementById("events-empty");
     if (vacio) vacio.hidden = true;
     texto("#events-count", tbody.children.length + " mostradas (máx. 300)");
+    enlazar_origenes();
+  }
+
+  // --------------------------------------------- enlaces al equipo del origen
+  // La celda de origen trae data-device-id cuando el panel sabe a qué equipo
+  // pertenece la IP/MAC del evento (metadato de la plantilla o de /api/live);
+  // si no lo trae se queda como texto: nunca se inventa un enlace. El <a>
+  // hereda .table a del tema (subrayado punteado, acento al pasar el ratón) y
+  // se construye con DOM, sin innerHTML.
+  function enlazar_origenes() {
+    var base = (cuerpo.dataset.devicesUrl || "/devices").replace(/\/$/, "");
+    var celdas = document.querySelectorAll("td[data-origen]:not([data-enlazado])");
+    for (var i = 0; i < celdas.length; i++) {
+      var td = celdas[i];
+      td.setAttribute("data-enlazado", "1");
+      var id = parseInt(td.getAttribute("data-device-id"), 10);
+      if (!id || id < 1) continue;
+      var enlace = document.createElement("a");
+      enlace.className = "origen-link";
+      enlace.setAttribute("href", base + "/" + id + "?from=events");
+      enlace.setAttribute("title", "Ver el dispositivo de " +
+        (td.getAttribute("data-ip") || "este origen"));
+      while (td.firstChild) enlace.appendChild(td.firstChild);
+      td.appendChild(enlace);
+    }
   }
 
   function celda(clase) {
@@ -429,6 +454,9 @@
     tr.appendChild(tdEvento);
 
     var tdOrigen = celda("mono small");
+    tdOrigen.setAttribute("data-origen", "");
+    if (ev.ip_origen) tdOrigen.setAttribute("data-ip", String(ev.ip_origen));
+    if (ev.device_id) tdOrigen.setAttribute("data-device-id", String(ev.device_id));
     tdOrigen.appendChild(document.createTextNode(ev.ip_origen || "—"));
     tdOrigen.appendChild(document.createElement("br"));
     tdOrigen.appendChild(document.createTextNode(ev.mac_origen || ""));
@@ -767,5 +795,9 @@
   conectarControles();
   pintarInterruptor();
   pintarNota();
+  enlazar_origenes();
+  // El script va con defer, así que el DOM ya está listo; el listener cubre
+  // cualquier carga en la que live.js acabe ejecutándose antes (p. ej. inline).
+  document.addEventListener("DOMContentLoaded", enlazar_origenes);
   sondear();
 }());

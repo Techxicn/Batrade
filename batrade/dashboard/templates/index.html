@@ -79,13 +79,14 @@
       <thead><tr><th>Severidad</th><th>Evento</th><th>Origen</th><th>Cuándo</th><th></th></tr></thead>
       <tbody>
       {% for e in recent %}
+        {% set oid = (origenes|default({})).get(e['id']) %}
         <tr>
           <td><span class="chip {{ e['severidad'] }}">{{ sev_label[e['severidad']] }}</span></td>
           <td>
             <a href="{{ url_for('events', tipo=e['tipo']) }}">{{ e['tipo'] }}</a>
             {% if e["repeat_count"] > 1 %}<span class="repeat">×{{ e["repeat_count"] }}</span>{% endif %}
           </td>
-          <td class="mono">{{ e["ip_origen"] or "—" }}<br><small>{{ e["mac_origen"] or "" }}</small></td>
+          <td class="mono" data-origen data-ip="{{ e['ip_origen'] or '' }}"{% if oid %} data-device-id="{{ oid }}"{% endif %}>{{ e["ip_origen"] or "—" }}<br><small>{{ e["mac_origen"] or "" }}</small></td>
           <td title="{{ e['last_ts']|ts }}">{{ e["last_ts"]|ago }}</td>
           <td>{% if e["disposicion"] == "fp" %}<span class="tag">FP</span>{% endif %}</td>
         </tr>
