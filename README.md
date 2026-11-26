@@ -575,6 +575,44 @@ sudo batrade reset-db --keep-devices                 # keep inventory, drop simu
 
 Then run the manual UDP check described in *Verifying UDP detection by hand*. This is the one check the automated suite cannot do for you. To remove the installation, see *System-wide installation* (`--uninstall`, `--purge`).
 
+## Updating Batrade
+
+**Stop both writers first.** The sensor, the dashboard and the CLI open the same SQLite file; updating while the sensor runs means two writers over one database and, on the first start of the new code, a migration racing against a process that is still using it. Stop them before pulling code, whichever control plane you use:
+
+```bash
+batrade stop                                          # CLI-managed sensor and panel
+sudo systemctl stop batrade-sensor batrade-dashboard  # systemd units
+```
+
+### Repository install (development)
+
+```bash
+git pull origin main
+pip install -e ".[dev,ml]"       # dev: pytest + ruff; ml: numpy for the flow engine
+batrade init                     # applies the pending migrations
+batrade restart
+```
+
+If you installed with `install.sh --venv`, activate the environment first (`. .venv/bin/activate`) so `pip` and `batrade` are the ones inside `.venv`; otherwise you upgrade the system interpreter and leave the venv running the old code. `batrade restart` launches the sensor in the background, so run it with `sudo` when you want `live` capture (the units grant the capabilities; the CLI does not).
+
+### System-wide install (`--system`)
+
+```bash
+cd ~/code/Batrade                                         # the clone you installed from
+git pull origin main
+sudo bash install.sh --system                             # re-copies the code, rebuilds the venv
+sudo systemctl restart batrade-sensor batrade-dashboard   # if you use the units
+batrade restart                                           # if you use the CLI instead
+```
+
+The prefix (`/opt/batrade` by default) has no `.git`, so the pull happens in the clone and the installer is what refreshes the installed copy. Re-running it is idempotent: the copy skips `.git`, `var/`, `.venv`, `.env` and `config.yaml`, so the inventory, the events, the secrets and your configuration survive, and the `--delete` pass cannot remove them because rsync never touches excluded paths. It also rewrites the `/usr/local/bin/batrade` wrapper (and the units, with `--systemd`) for the current prefix. Keep one control plane per installation: with the units active, `batrade restart` refuses and tells you to use `systemctl` (see *Production deployment*).
+
+### Migrations after an update
+
+`batrade init` applies only the pending migrations, and so does the next start of the sensor or the dashboard — an update never needs a manual migration step. Each migration runs in its own transaction together with the version bump, and before modifying a database that already has data a `<db>.bak-v<N>` copy (mode 600) is written next to it; an existing backup is never overwritten (`-2`, `-3`, … are appended). A migration that fails leaves the schema and the stored version untouched. `batrade doctor` prints the stored schema version, the effective mode and the capabilities: the quick check that the new code is the one running.
+
+Do **not** run `reset-db` to "finish" an update. It empties the history and the inventory and asks you to type `REINICIAR`; it exists for wiping a database polluted by `demo`, `replay` or `simulate`, nothing else. If you really want a clean start, see *Resetting the database*.
+
 ## Troubleshooting
 
 - **`network.interface inexistente`** — run `batrade interfaces` and copy a real name, or leave `interface: auto`.
@@ -602,7 +640,7 @@ Tests cover the detection engine, rules, inventory, notification queue, store, d
 ```
 SECURITY.md        How to report a vulnerability, scope and disclosure timeline
 CONTRIBUTING.md    Tests, invariants, commit style and how to propose a change
-DECISIONS.md       Architecture decisions D-01..D-12 (local, not versioned)
+DECISIONS.md       Architecture decisions D-01..D-13
 batrade/           Python package
   cli.py           Entry point, subcommands and root resolution
   daemon.py        Background start/stop/status; systemd guard

@@ -1,6 +1,8 @@
 """Panel Flask: rutas, CSRF, autenticación y validación de objetivos."""
 from __future__ import annotations
 
+import re
+
 import pytest
 
 from batrade import db, store
@@ -149,3 +151,50 @@ def test_learning_approval_flow(client, cfg):
         "SELECT COUNT(*) AS n FROM devices WHERE estado_confianza = 'confiable'"
     ).fetchone()["n"] == 1
     conn.close()
+
+
+# --------------------------------------------------------------------- origen
+def _evento_de_origen(cfg, *, ts, clave, ip, mac, severidad="warn"):
+    conn = db.connect(cfg.paths.db)
+    store.add_event(conn, ts=ts, tipo="device_new", severidad=severidad,
+                    clave_dedupe=clave, ip_origen=ip, mac_origen=mac,
+                    cooldown_s=0)
+    conn.close()
+
+
+def test_events_rows_marcan_el_equipo_del_origen(client, cfg):
+    """La celda de origen lleva data-device-id cuando el equipo está fichado.
+
+    live.js envuelve esa celda en un <a href="/devices/<id>?from=events">; si el
+    id no llega en el HTML, el enlace no se puede construir.
+    """
+    device_id = _seed_device(cfg)
+    _evento_de_origen(cfg, ts=1000, clave="origen-fichado",
+                      ip="10.10.10.50", mac="3c:22:fb:11:22:33")
+    _evento_de_origen(cfg, ts=1001, clave="origen-ajeno", severidad="crit",
+                      ip="10.10.10.99", mac="aa:bb:cc:dd:ee:ff")
+
+    html = client.get("/events").get_data(as_text=True)
+
+    fichada = re.search(r'<td[^>]*data-ip="10\.10\.10\.50"[^>]*>', html)
+    ajena = re.search(r'<td[^>]*data-ip="10\.10\.10\.99"[^>]*>', html)
+    assert fichada is not None and ajena is not None
+    assert f'data-device-id="{device_id}"' in fichada.group(0)
+    # Un origen sin equipo fichado se queda como texto: no se inventa el enlace.
+    assert "data-device-id" not in ajena.group(0)
+    # El destino que construye el cliente existe y acepta el marcador from=events.
+    assert client.get(f"/devices/{device_id}?from=events").status_code == 200
+
+
+def test_panel_y_api_live_exponen_el_mismo_equipo(client, cfg):
+    """El panel y la fila que inserta live.js comparten el id del equipo."""
+    device_id = _seed_device(cfg)
+    _evento_de_origen(cfg, ts=1000, clave="origen-live",
+                      ip="10.10.10.50", mac="3c:22:fb:11:22:33")
+
+    panel = client.get("/").get_data(as_text=True)
+    assert f'data-device-id="{device_id}"' in panel
+
+    datos = client.get("/api/live?after=0").get_json()
+    evento = next(e for e in datos["eventos"] if e["ip_origen"] == "10.10.10.50")
+    assert evento["device_id"] == device_id
